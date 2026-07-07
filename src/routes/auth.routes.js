@@ -1,0 +1,14 @@
+const express = require('express');
+const requireAuth = require('../middleware/auth');
+const ctrl = require('../controllers/auth.controller');
+const asyncHandler = require('../utils/asyncHandler');
+
+const router = express.Router();
+
+router.post('/signup', asyncHandler(ctrl.signup));
+router.post('/login', asyncHandler(ctrl.login));
+router.post('/logout', asyncHandler(ctrl.logout));
+router.get('/me', requireAuth, asyncHandler(ctrl.me));
+router.post('/change-password', requireAuth, asyncHandler(ctrl.changePassword));
+
+module.exports = router;
