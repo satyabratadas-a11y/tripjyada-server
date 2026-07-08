@@ -8,7 +8,7 @@
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
     "seed:admin": "node scripts/seedAdmin.js"
-  },
+  },  
   "dependencies": {
     "@anthropic-ai/sdk": "^0.65.0",
     "bcryptjs": "^2.4.3",
