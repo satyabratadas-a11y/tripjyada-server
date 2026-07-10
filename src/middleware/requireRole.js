@@ -1,6 +1,8 @@
+const { hasRequiredRole } = require('../utils/roles');
+
 function requireRole(...allowedRoles) {
   return (req, res, next) => {
-    if (!req.user || !allowedRoles.includes(req.user.role)) {
+    if (!req.user || !hasRequiredRole(req.user, allowedRoles)) {
       return res.status(403).json({ error: 'Forbidden' });
     }
     next();

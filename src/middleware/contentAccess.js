@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const Client = require('../models/Client');
+const { isAdminLike } = require('../utils/roles');
 
 /**
  * Loads :clientId, and grants access to global admins or client members.
@@ -16,16 +17,17 @@ async function requireClientAccess(req, res, next) {
   const client = await Client.findById(clientId);
   if (!client) return res.status(404).json({ error: 'Client not found' });
 
-  const isGlobalAdmin = req.user.role === 'admin';
+  const isGlobalAdmin = isAdminLike(req.user);
   const clientRole = client.roleFor(req.user._id);
+  const isEmployeeContributor = req.user.role === 'employee';
 
-  if (!isGlobalAdmin && !clientRole) {
+  if (!isGlobalAdmin && !clientRole && !isEmployeeContributor) {
     return res.status(403).json({ error: 'You do not have access to this client' });
   }
 
   req.client = client;
   req.isGlobalAdmin = isGlobalAdmin;
-  req.clientRole = clientRole;
+  req.clientRole = clientRole || (isEmployeeContributor ? 'viewer' : null);
   next();
 }
 

@@ -48,6 +48,12 @@ function formatTaskDate(date) {
   return new Date(date).toISOString().slice(0, 10);
 }
 
+function formatRoleLabel(role) {
+  return String(role || '')
+    .replaceAll('_', ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 async function sendApprovalEmail(user) {
   return sendEmail({
     to: user.email,
@@ -56,7 +62,7 @@ async function sendApprovalEmail(user) {
       `Hi ${user.name},`,
       '',
       'Your Task Tracker account has been approved.',
-      `Role: ${user.role}`,
+      `Role: ${formatRoleLabel(user.role)}`,
       user.jobTitle ? `Job title: ${user.jobTitle}` : '',
       '',
       `You can now sign in here: ${getClientOrigin()}/login`,

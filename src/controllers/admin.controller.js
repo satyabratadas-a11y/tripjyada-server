@@ -2,9 +2,33 @@ const User = require('../models/User');
 const AuditLog = require('../models/AuditLog');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { sendApprovalEmail } = require('../utils/email');
+const { USER_ROLES } = require('../utils/roles');
 
-const USER_ROLES = ['admin', 'employee'];
 const USER_STATUSES = ['pending', 'active', 'disabled'];
+
+async function countActiveSuperAdmins() {
+  return User.countDocuments({ role: 'super_admin', status: 'active' });
+}
+
+async function protectFinalSuperAdmin(user, nextRole, nextStatus) {
+  const currentRole = user.role;
+  const currentStatus = user.status;
+
+  const losesSuperAdmin = currentRole === 'super_admin' && nextRole !== 'super_admin';
+  const losesActiveStatus = currentRole === 'super_admin' && currentStatus === 'active' && nextStatus !== 'active';
+
+  if (!losesSuperAdmin && !losesActiveStatus) return;
+
+  const activeSuperAdmins = await countActiveSuperAdmins();
+  if (activeSuperAdmins <= 1) {
+    const reason = losesActiveStatus
+      ? 'You cannot disable the last active super admin account'
+      : 'You cannot remove the last super admin role';
+    const error = new Error(reason);
+    error.status = 400;
+    throw error;
+  }
+}
 
 async function listUsers(req, res) {
   const { status } = req.query;
@@ -30,7 +54,7 @@ async function approveUser(req, res) {
   const before = { role: user.role, jobTitle: user.jobTitle, status: user.status };
   user.status = 'active';
   if (role) user.role = role;
-  if (jobTitle !== undefined) user.jobTitle = jobTitle;
+  if (jobTitle !== undefined) user.jobTitle = String(jobTitle).trim();
   await user.save();
 
   await recordAudit({
@@ -61,6 +85,9 @@ async function updateUser(req, res) {
   if (status && !USER_STATUSES.includes(status)) {
     return res.status(400).json({ error: `status must be one of: ${USER_STATUSES.join(', ')}` });
   }
+  if (name !== undefined && !String(name).trim()) {
+    return res.status(400).json({ error: 'name is required' });
+  }
 
   const user = await User.findById(id);
   if (!user) return res.status(404).json({ error: 'User not found' });
@@ -68,12 +95,19 @@ async function updateUser(req, res) {
   if (String(user._id) === String(req.user._id) && status && status !== 'active') {
     return res.status(400).json({ error: 'You cannot disable your own account' });
   }
+  if (String(user._id) === String(req.user._id) && role && role !== user.role) {
+    return res.status(400).json({ error: 'You cannot change your own system role' });
+  }
+
+  const nextRole = role || user.role;
+  const nextStatus = status || user.status;
+  await protectFinalSuperAdmin(user, nextRole, nextStatus);
 
   const before = { role: user.role, jobTitle: user.jobTitle, status: user.status, name: user.name };
   if (role) user.role = role;
-  if (jobTitle !== undefined) user.jobTitle = jobTitle;
+  if (jobTitle !== undefined) user.jobTitle = String(jobTitle).trim();
   if (status) user.status = status;
-  if (name) user.name = name;
+  if (name !== undefined) user.name = String(name).trim();
   await user.save();
 
   await recordAudit({

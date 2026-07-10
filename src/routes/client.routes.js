@@ -20,10 +20,10 @@ router.post('/', asyncHandler(ctrl.createClient));
 router.use('/:clientId', asyncHandler(requireClientAccess));
 
 router.get('/:clientId', asyncHandler(ctrl.getClient));
-router.patch('/:clientId', requireClientRole('owner'), asyncHandler(ctrl.updateClient));
+router.patch('/:clientId', requireClientRole('owner', 'editor', 'viewer'), asyncHandler(ctrl.updateClient));
 router.delete('/:clientId', requireRole('admin'), asyncHandler(ctrl.deleteClient));
-router.post('/:clientId/members', requireClientRole('owner'), asyncHandler(ctrl.addMember));
-router.delete('/:clientId/members/:userId', requireClientRole('owner'), asyncHandler(ctrl.removeMember));
+router.post('/:clientId/members', requireRole('admin'), asyncHandler(ctrl.addMember));
+router.delete('/:clientId/members/:userId', requireRole('admin'), asyncHandler(ctrl.removeMember));
 router.delete('/:clientId/comments/:commentId', asyncHandler(commentCtrl.deleteComment));
 
 router.use('/:clientId/pillars', pillarRoutes);

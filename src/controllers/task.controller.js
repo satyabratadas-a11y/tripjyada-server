@@ -4,6 +4,7 @@ const User = require('../models/User');
 const { deriveDayType, startOfMonth, endOfMonthExclusive } = require('../utils/scoring');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { sendTaskAssignedEmail, sendTaskReviewEmail } = require('../utils/email');
+const { isAdminLike } = require('../utils/roles');
 
 const ADMIN_STATUSES = ['pending', 'completed', 'on_progress', 'incomplete', 'flagged'];
 const MEMBER_STATUSES = ['not_started', 'on_progress', 'done'];
@@ -35,7 +36,7 @@ async function getToday(req, res) {
   const { start, end } = dayRangeUTC(req.query.date);
 
   let employees;
-  if (req.user.role === 'admin') {
+  if (isAdminLike(req.user)) {
     employees = await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 });
   } else {
     employees = [req.user];
@@ -68,7 +69,7 @@ async function listTasks(req, res) {
   if (!month || !year) return res.status(400).json({ error: 'month and year query params are required' });
 
   let employeeId;
-  if (req.user.role === 'admin') {
+  if (isAdminLike(req.user)) {
     employeeId = req.query.employeeId;
     if (!employeeId || !mongoose.isValidObjectId(employeeId)) {
       return res.status(400).json({ error: 'employeeId query param must be a valid id' });
@@ -232,8 +233,8 @@ async function deleteTask(req, res) {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
-  const employee = req.user.role === 'admin' ? await User.findById(task.employee) : null;
-  if (req.user.role !== 'admin') {
+  const employee = isAdminLike(req.user) ? await User.findById(task.employee) : null;
+  if (!isAdminLike(req.user)) {
     if (String(task.employee) !== String(req.user._id)) {
       return res.status(403).json({ error: 'You can only delete your own task' });
     }
@@ -244,7 +245,7 @@ async function deleteTask(req, res) {
 
   await task.deleteOne();
 
-  if (req.user.role === 'admin') {
+  if (isAdminLike(req.user)) {
     await recordAudit({
       actor: req.user,
       action: 'task.deleted',

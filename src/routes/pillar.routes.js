@@ -6,8 +6,8 @@ const asyncHandler = require('../utils/asyncHandler');
 const router = express.Router();
 
 router.get('/', asyncHandler(ctrl.listPillars));
-router.post('/', requireClientRole('owner'), asyncHandler(ctrl.createPillar));
-router.patch('/:id', requireClientRole('owner'), asyncHandler(ctrl.updatePillar));
-router.delete('/:id', requireClientRole('owner'), asyncHandler(ctrl.deletePillar));
+router.post('/', requireClientRole('owner', 'editor', 'viewer'), asyncHandler(ctrl.createPillar));
+router.patch('/:id', requireClientRole('owner', 'editor', 'viewer'), asyncHandler(ctrl.updatePillar));
+router.delete('/:id', requireClientRole('owner', 'editor', 'viewer'), asyncHandler(ctrl.deletePillar));
 
 module.exports = router;

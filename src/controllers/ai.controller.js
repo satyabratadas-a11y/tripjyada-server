@@ -2,8 +2,6 @@ const ContentEntry = require('../models/ContentEntry');
 const ContentPillar = require('../models/ContentPillar');
 const { generateStructured } = require('../utils/anthropic');
 
-const { CONTENT_FORMATS, PLATFORMS } = ContentEntry;
-
 async function generateIdeas(req, res) {
   const { pillar, platform, count } = req.body;
   const n = Math.min(Math.max(parseInt(count, 10) || 5, 1), 15);
@@ -91,70 +89,4 @@ async function generateHook(req, res) {
   return res.json(result);
 }
 
-async function generateCalendar(req, res) {
-  const { industry, businessType, platforms, postsPerWeek, pillars, startDate, goals } = req.body;
-  if (!Array.isArray(platforms) || platforms.length === 0) {
-    return res.status(400).json({ error: 'platforms must be a non-empty array' });
-  }
-  if (!startDate) return res.status(400).json({ error: 'startDate is required' });
-
-  const invalidPlatform = platforms.find((p) => !PLATFORMS.includes(p));
-  if (invalidPlatform) return res.status(400).json({ error: `platforms must be one of: ${PLATFORMS.join(', ')}` });
-
-  const perWeek = Math.min(Math.max(parseInt(postsPerWeek, 10) || 5, 1), 7);
-  const pillarNames = Array.isArray(pillars) && pillars.length > 0 ? pillars : ['General'];
-
-  const result = await generateStructured({
-    system:
-      'You are a senior digital marketing strategist. Produce a realistic, varied 30-day content calendar as strict structured data — no filler, no repeated ideas.',
-    prompt: [
-      `Client: ${req.client.name}`,
-      `Industry: ${industry || req.client.industry || 'unspecified'}`,
-      `Business type: ${businessType || req.client.businessType || 'unspecified'}`,
-      `Platforms to plan for: ${platforms.join(', ')}`,
-      `Content pillars to rotate through: ${pillarNames.join(', ')}`,
-      `Target roughly ${perWeek} posts per week across the 30-day window (day offsets 0-29, 0 = start date).`,
-      goals ? `Goals: ${goals}` : '',
-      'For each entry, pick one pillar name from the list, one platform from the list, and a sensible content format for that platform. Vary ideas, hooks, and captions — never repeat the same idea twice.',
-    ]
-      .filter(Boolean)
-      .join('\n'),
-    schema: {
-      type: 'object',
-      properties: {
-        entries: {
-          type: 'array',
-          items: {
-            type: 'object',
-            properties: {
-              dayOffset: { type: 'integer' },
-              format: { type: 'string', enum: CONTENT_FORMATS },
-              platform: { type: 'string', enum: PLATFORMS },
-              pillar: { type: 'string' },
-              idea: { type: 'string' },
-              hook: { type: 'string' },
-              caption: { type: 'string' },
-              cta: { type: 'string' },
-            },
-            required: ['dayOffset', 'format', 'platform', 'pillar', 'idea', 'hook', 'caption', 'cta'],
-            additionalProperties: false,
-          },
-        },
-      },
-      required: ['entries'],
-      additionalProperties: false,
-    },
-    maxTokens: 8192,
-  });
-
-  const base = new Date(startDate);
-  const entries = (result.entries || []).map((e) => {
-    const date = new Date(base);
-    date.setUTCDate(date.getUTCDate() + Math.max(0, Math.min(29, e.dayOffset || 0)));
-    return { ...e, date: date.toISOString().slice(0, 10) };
-  });
-
-  return res.json({ entries });
-}
-
-module.exports = { generateIdeas, generateCaption, generateHook, generateCalendar };
+module.exports = { generateIdeas, generateCaption, generateHook };

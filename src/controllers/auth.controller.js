@@ -26,7 +26,7 @@ async function signup(req, res) {
   await user.save();
 
   return res.status(201).json({
-    message: 'Account created. An admin must approve it before you can log in.',
+    message: 'Account created. A super admin must approve it before you can log in.',
     user: user.toSafeJSON(),
   });
 }
@@ -45,7 +45,7 @@ async function login(req, res) {
   if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
 
   if (user.status === 'pending') {
-    return res.status(403).json({ error: 'Your account is awaiting admin approval' });
+    return res.status(403).json({ error: 'Your account is awaiting super admin approval' });
   }
   if (user.status === 'disabled') {
     return res.status(403).json({ error: 'Your account has been disabled' });

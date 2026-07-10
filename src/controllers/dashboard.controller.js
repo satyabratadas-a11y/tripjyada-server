@@ -1,6 +1,7 @@
 const User = require('../models/User');
 const Task = require('../models/Task');
 const { startOfMonth, endOfMonthExclusive, rollupTasks } = require('../utils/scoring');
+const { isAdminLike } = require('../utils/roles');
 
 async function getDashboard(req, res) {
   const month = parseInt(req.query.month, 10);
@@ -8,7 +9,7 @@ async function getDashboard(req, res) {
   if (!month || !year) return res.status(400).json({ error: 'month and year query params are required' });
 
   const employees =
-    req.user.role === 'admin'
+    isAdminLike(req.user)
       ? await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 })
       : [req.user];
 

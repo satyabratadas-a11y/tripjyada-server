@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 const bcrypt = require('bcryptjs');
+const { USER_ROLES } = require('../utils/roles');
 
 const userSchema = new mongoose.Schema(
   {
@@ -7,7 +8,7 @@ const userSchema = new mongoose.Schema(
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
     employeeCode: { type: String, trim: true, unique: true, sparse: true },
     passwordHash: { type: String, required: true },
-    role: { type: String, enum: ['admin', 'employee'], default: 'employee' },
+    role: { type: String, enum: USER_ROLES, default: 'employee' },
     jobTitle: { type: String, trim: true, default: '' },
     status: { type: String, enum: ['pending', 'active', 'disabled'], default: 'pending' },
   },
