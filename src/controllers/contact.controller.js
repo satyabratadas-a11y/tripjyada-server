@@ -7,14 +7,19 @@ const { recordAudit } = require('../utils/audit');
 const CONTACT_FIELDS = ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address', 'notes', 'rawOcrText'];
 
 async function scanCard(req, res) {
+  const requestStartedAt = Date.now();
   const frontFile = req.files?.image?.[0];
   const backFile = req.files?.backImage?.[0];
   if (!frontFile) return res.status(400).json({ error: 'No card image uploaded' });
 
+  // Time from when Express finished receiving the (already-parsed) upload to now is ~0 — the real
+  // upload transfer time happens before this handler even runs, so it isn't visible here. This
+  // marks how long the Gemini round trip itself takes, which is the part actually in our control.
   const images = [{ buffer: frontFile.buffer, mimeType: frontFile.mimetype }];
   if (backFile) images.push({ buffer: backFile.buffer, mimeType: backFile.mimetype });
 
   const fields = await extractCardFields(images);
+  console.log(`[scanCard] request handled in ${Date.now() - requestStartedAt}ms`);
   return res.json({ fields });
 }
 

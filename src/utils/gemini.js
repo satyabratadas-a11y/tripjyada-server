@@ -88,14 +88,25 @@ async function extractCardFields(images) {
   const BACKOFF_MS = [500, 1500, 3000];
   let lastError;
 
+  const totalBytes = images.reduce((sum, img) => sum + img.buffer.length, 0);
+  const startedAt = Date.now();
+
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+    const attemptStartedAt = Date.now();
     try {
       const response = await ai.models.generateContent(request);
       const text = response.text;
+      console.log(
+        `[gemini] scan ok — ${images.length} image(s), ${(totalBytes / 1024).toFixed(0)}KB, attempt ${attempt + 1}, ` +
+          `call took ${Date.now() - attemptStartedAt}ms, total ${Date.now() - startedAt}ms`
+      );
       if (!text) throw new Error('AI card scan returned no content');
       return JSON.parse(text);
     } catch (err) {
       lastError = err;
+      console.log(
+        `[gemini] scan attempt ${attempt + 1} failed after ${Date.now() - attemptStartedAt}ms: ${err.message?.slice(0, 200)}`
+      );
       if (attempt < MAX_ATTEMPTS - 1 && isRetryableError(err)) {
         await sleep(BACKOFF_MS[attempt]);
         continue;
