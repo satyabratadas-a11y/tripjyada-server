@@ -7,7 +7,7 @@ const auditLogSchema = new mongoose.Schema(
     actorName: { type: String, required: true, trim: true },
     actorRole: { type: String, enum: USER_ROLES, required: true },
     action: { type: String, required: true, trim: true },
-    targetType: { type: String, enum: ['user', 'task'], required: true },
+    targetType: { type: String, enum: ['user', 'task', 'contact'], required: true },
     targetId: { type: String, required: true, trim: true },
     targetLabel: { type: String, trim: true, default: '' },
     summary: { type: String, required: true, trim: true },

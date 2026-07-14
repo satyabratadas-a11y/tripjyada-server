@@ -1,0 +1,119 @@
+const ExcelJS = require('exceljs');
+const Contact = require('../models/Contact');
+const { isAdminLike } = require('../utils/roles');
+const { extractCardFields } = require('../utils/gemini');
+const { recordAudit } = require('../utils/audit');
+
+const CONTACT_FIELDS = ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address', 'notes', 'rawOcrText'];
+
+async function scanCard(req, res) {
+  const frontFile = req.files?.image?.[0];
+  const backFile = req.files?.backImage?.[0];
+  if (!frontFile) return res.status(400).json({ error: 'No card image uploaded' });
+
+  const images = [{ buffer: frontFile.buffer, mimeType: frontFile.mimetype }];
+  if (backFile) images.push({ buffer: backFile.buffer, mimeType: backFile.mimetype });
+
+  const fields = await extractCardFields(images);
+  return res.json({ fields });
+}
+
+function pickContactFields(body) {
+  const picked = {};
+  for (const field of CONTACT_FIELDS) {
+    if (typeof body[field] === 'string') picked[field] = body[field];
+  }
+  return picked;
+}
+
+async function createContact(req, res) {
+  const frontFile = req.files?.image?.[0];
+  const backFile = req.files?.backImage?.[0];
+  if (!frontFile) return res.status(400).json({ error: 'No card image uploaded' });
+
+  const imageUrl = `data:${frontFile.mimetype};base64,${frontFile.buffer.toString('base64')}`;
+  const backImageUrl = backFile ? `data:${backFile.mimetype};base64,${backFile.buffer.toString('base64')}` : '';
+
+  const contact = await Contact.create({
+    ...pickContactFields(req.body),
+    capturedBy: req.user._id,
+    imageUrl,
+    backImageUrl,
+  });
+
+  return res.status(201).json({ contact });
+}
+
+async function listMine(req, res) {
+  const contacts = await Contact.find({ capturedBy: req.user._id }).sort({ createdAt: -1 });
+  return res.json({ contacts });
+}
+
+async function exportMine(req, res) {
+  const contacts = await Contact.find({ capturedBy: req.user._id }).sort({ createdAt: -1 });
+
+  const workbook = new ExcelJS.Workbook();
+  workbook.creator = 'Task Tracker';
+  workbook.created = new Date();
+
+  const sheet = workbook.addWorksheet('My Contacts');
+  const header = sheet.addRow(['Date', 'Name', 'Company', 'Phone', 'Email', 'Address']);
+  header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.eachCell((cell) => {
+    cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } };
+  });
+
+  for (const c of contacts) {
+    sheet.addRow([c.createdAt.toISOString().slice(0, 10), c.name, c.company, c.phone, c.email, c.address]);
+  }
+
+  sheet.columns.forEach((col) => {
+    col.width = 24;
+  });
+
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', `attachment; filename="my-contacts-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+
+  await workbook.xlsx.write(res);
+  res.end();
+}
+
+async function listAll(req, res) {
+  const { agentId, q } = req.query;
+  const filter = {};
+  if (agentId) filter.capturedBy = agentId;
+  if (q) {
+    const re = new RegExp(String(q).trim(), 'i');
+    filter.$or = [{ name: re }, { company: re }];
+  }
+
+  const contacts = await Contact.find(filter).populate('capturedBy', 'name email').sort({ createdAt: -1 });
+  return res.json({ contacts });
+}
+
+async function deleteContact(req, res) {
+  const contact = await Contact.findById(req.params.id);
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+
+  if (!isAdminLike(req.user) && String(contact.capturedBy) !== String(req.user._id)) {
+    return res.status(403).json({ error: 'You can only delete your own captured contacts' });
+  }
+
+  await contact.deleteOne();
+
+  if (isAdminLike(req.user)) {
+    await recordAudit({
+      actor: req.user,
+      action: 'contact.deleted',
+      targetType: 'contact',
+      targetId: contact._id,
+      targetLabel: contact.name || contact.company || 'Unnamed contact',
+      summary: `Deleted business card contact ${contact.name || contact.company || ''}`.trim(),
+      metadata: { capturedBy: String(contact.capturedBy), company: contact.company },
+    });
+  }
+
+  return res.status(204).send();
+}
+
+module.exports = { scanCard, createContact, listMine, exportMine, listAll, deleteContact };

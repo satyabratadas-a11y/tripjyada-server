@@ -8,6 +8,7 @@ const router = express.Router();
 
 router.use(requireAuth, requireRole('admin'));
 
+router.get('/super-dashboard', requireRole('super_admin'), asyncHandler(ctrl.getSuperDashboard));
 router.get('/users', requireRole('super_admin'), asyncHandler(ctrl.listUsers));
 router.get('/audit-logs', asyncHandler(ctrl.listAuditLogs));
 router.patch('/users/:id/approve', requireRole('super_admin'), asyncHandler(ctrl.approveUser));

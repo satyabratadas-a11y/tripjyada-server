@@ -1,4 +1,4 @@
-const USER_ROLES = ['super_admin', 'admin', 'employee'];
+const USER_ROLES = ['super_admin', 'admin', 'employee', 'b2b_agent'];
 
 function getRole(input) {
   if (!input) return null;

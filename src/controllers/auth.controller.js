@@ -1,5 +1,47 @@
 const User = require('../models/User');
+const crypto = require('crypto');
+const { OAuth2Client } = require('google-auth-library');
 const { signToken, setAuthCookie, clearAuthCookie } = require('../utils/token');
+
+let googleClient;
+
+function getGoogleClientId() {
+  return process.env.GOOGLE_CLIENT_ID || '';
+}
+
+function getGoogleClient() {
+  if (!googleClient) {
+    googleClient = new OAuth2Client();
+  }
+  return googleClient;
+}
+
+function randomPassword() {
+  return crypto.randomBytes(24).toString('hex');
+}
+
+async function verifyGoogleCredential(credential) {
+  const clientId = getGoogleClientId();
+  if (!clientId) {
+    const error = new Error('Google login is not configured. Add GOOGLE_CLIENT_ID on the server and NEXT_PUBLIC_GOOGLE_CLIENT_ID on the client.');
+    error.status = 503;
+    throw error;
+  }
+
+  const ticket = await getGoogleClient().verifyIdToken({
+    idToken: credential,
+    audience: clientId,
+  });
+
+  const payload = ticket.getPayload();
+  if (!payload?.email || !payload.email_verified) {
+    const error = new Error('Google account could not be verified');
+    error.status = 401;
+    throw error;
+  }
+
+  return payload;
+}
 
 async function signup(req, res) {
   const { name, email, password, jobTitle, employeeCode } = req.body;
@@ -56,6 +98,70 @@ async function login(req, res) {
   return res.json({ user: user.toSafeJSON() });
 }
 
+async function loginWithGoogle(req, res) {
+  const { credential } = req.body;
+  if (!credential || typeof credential !== 'string') {
+    return res.status(400).json({ error: 'Google credential is required' });
+  }
+
+  const payload = await verifyGoogleCredential(credential);
+  const email = String(payload.email).toLowerCase().trim();
+  const googleId = String(payload.sub || '').trim();
+  const avatarUrl = String(payload.picture || '').trim();
+  const displayName = String(payload.name || email.split('@')[0] || 'Google User').trim();
+
+  let user = await User.findOne({
+    $or: [{ email }, ...(googleId ? [{ googleId }] : [])],
+  });
+
+  if (!user) {
+    user = new User({
+      name: displayName,
+      email,
+      googleId,
+      avatarUrl,
+      role: 'employee',
+      status: 'pending',
+    });
+    await user.setPassword(randomPassword());
+    await user.save();
+
+    return res.status(200).json({
+      pending: true,
+      message: 'Google account linked. A super admin must approve your account before you can log in.',
+    });
+  }
+
+  let changed = false;
+  if (googleId && user.googleId !== googleId) {
+    user.googleId = googleId;
+    changed = true;
+  }
+  if (avatarUrl && user.avatarUrl !== avatarUrl) {
+    user.avatarUrl = avatarUrl;
+    changed = true;
+  }
+  if (!user.name && displayName) {
+    user.name = displayName;
+    changed = true;
+  }
+  if (changed) await user.save();
+
+  if (user.status === 'pending') {
+    return res.status(200).json({
+      pending: true,
+      message: 'Google account linked. Your account is awaiting super admin approval.',
+    });
+  }
+  if (user.status === 'disabled') {
+    return res.status(403).json({ error: 'Your account has been disabled' });
+  }
+
+  const token = signToken(user);
+  setAuthCookie(res, token);
+  return res.json({ user: user.toSafeJSON() });
+}
+
 async function logout(req, res) {
   clearAuthCookie(res);
   return res.json({ message: 'Logged out' });
@@ -82,4 +188,4 @@ async function changePassword(req, res) {
   return res.json({ message: 'Password updated' });
 }
 
-module.exports = { signup, login, logout, me, changePassword };
+module.exports = { signup, login, loginWithGoogle, logout, me, changePassword };

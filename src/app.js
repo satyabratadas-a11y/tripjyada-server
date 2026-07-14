@@ -9,12 +9,18 @@ const dashboardRoutes = require('./routes/dashboard.routes');
 const reportRoutes = require('./routes/report.routes');
 const clientRoutes = require('./routes/client.routes');
 const notificationRoutes = require('./routes/notification.routes');
+const contactRoutes = require('./routes/contact.routes');
 
 const app = express();
 
+// CLIENT_ORIGIN may be a comma-separated list (e.g. "http://localhost:3000,http://192.168.1.6:3000")
+// so the same dev server accepts requests from both a desktop browser and a phone on the LAN
+// (needed to test camera-based features, which desktops often can't).
+const allowedOrigins = (process.env.CLIENT_ORIGIN || 'http://localhost:3000').split(',').map((o) => o.trim());
+
 app.use(
   cors({
-    origin: process.env.CLIENT_ORIGIN || 'http://localhost:3000',
+    origin: allowedOrigins,
     credentials: true,
   })
 );
@@ -30,6 +36,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/content/clients', clientRoutes);
 app.use('/api/notifications', notificationRoutes);
+app.use('/api/contacts', contactRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
