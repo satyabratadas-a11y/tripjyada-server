@@ -34,13 +34,19 @@ function pickContactFields(body) {
 async function createContact(req, res) {
   const frontFile = req.files?.image?.[0];
   const backFile = req.files?.backImage?.[0];
-  if (!frontFile) return res.status(400).json({ error: 'No card image uploaded' });
+  const fields = pickContactFields(req.body);
 
-  const imageUrl = `data:${frontFile.mimetype};base64,${frontFile.buffer.toString('base64')}`;
+  // A scanned card always has a photo; a manually-entered contact has none — but it still needs at
+  // least one identifying field, or there's nothing to save.
+  if (!frontFile && !fields.name && !fields.company && !fields.phone && !fields.email) {
+    return res.status(400).json({ error: 'Enter at least a name, company, phone, or email' });
+  }
+
+  const imageUrl = frontFile ? `data:${frontFile.mimetype};base64,${frontFile.buffer.toString('base64')}` : '';
   const backImageUrl = backFile ? `data:${backFile.mimetype};base64,${backFile.buffer.toString('base64')}` : '';
 
   const contact = await Contact.create({
-    ...pickContactFields(req.body),
+    ...fields,
     capturedBy: req.user._id,
     imageUrl,
     backImageUrl,
