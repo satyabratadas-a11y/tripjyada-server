@@ -4,7 +4,15 @@ const User = require('../models/User');
 const { deriveDayType, startOfMonth, endOfMonthExclusive } = require('../utils/scoring');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { sendTaskAssignedEmail, sendTaskReviewEmail } = require('../utils/email');
-const { isAdminLike } = require('../utils/roles');
+const { isAdminLike, isSuperAdmin } = require('../utils/roles');
+
+// An admin can now self-log tasks the same way an employee does, but an admin (or super admin)
+// reviewing their own peer's task would defeat the point of review — so anything owned by an
+// admin-or-above requires a super admin specifically, the same way an employee's task requires
+// at least an admin.
+function ownerOutranksAdmin(ownerRole) {
+  return ownerRole === 'admin' || ownerRole === 'super_admin';
+}
 
 const ADMIN_STATUSES = ['pending', 'completed', 'on_progress', 'incomplete', 'flagged'];
 const MEMBER_STATUSES = ['not_started', 'on_progress', 'done'];
@@ -31,12 +39,15 @@ function validateEnumValue(res, field, value, allowed) {
 /**
  * Admin sees every active employee's tasks for the given day (defaults to today, and can be
  * overridden with ?date=YYYY-MM-DD to browse any day); an employee always sees only their own.
+ * ?scope=own forces the caller's own tasks instead — used by an admin's personal "My Today" page,
+ * since an admin-like caller would otherwise get the cross-employee oversight grid.
  */
 async function getToday(req, res) {
   const { start, end } = dayRangeUTC(req.query.date);
+  const ownOnly = req.query.scope === 'own';
 
   let employees;
-  if (isAdminLike(req.user)) {
+  if (isAdminLike(req.user) && !ownOnly) {
     employees = await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 });
   } else {
     employees = [req.user];
@@ -62,17 +73,27 @@ async function getToday(req, res) {
   return res.json({ date: start, rows });
 }
 
-/** Admin can request any employeeId; an employee is always forced to their own id. */
+/**
+ * Admin-like caller can request any employeeId (view-gated to super admin if that id outranks a
+ * plain admin), or omit it for their own tasks; a non-admin is always forced to their own id.
+ */
 async function listTasks(req, res) {
   const month = parseInt(req.query.month, 10);
   const year = parseInt(req.query.year, 10);
   if (!month || !year) return res.status(400).json({ error: 'month and year query params are required' });
 
+  // An admin-like caller viewing someone else's log needs an explicit employeeId; omitting it
+  // (as an admin's own "My Monthly Log" page does) falls back to their own tasks, same as an
+  // employee always gets.
   let employeeId;
-  if (isAdminLike(req.user)) {
+  if (isAdminLike(req.user) && req.query.employeeId) {
     employeeId = req.query.employeeId;
-    if (!employeeId || !mongoose.isValidObjectId(employeeId)) {
+    if (!mongoose.isValidObjectId(employeeId)) {
       return res.status(400).json({ error: 'employeeId query param must be a valid id' });
+    }
+    const target = await User.findById(employeeId);
+    if (ownerOutranksAdmin(target?.role) && !isSuperAdmin(req.user)) {
+      return res.status(403).json({ error: 'Only a super admin can view an admin\'s tasks' });
     }
   } else {
     employeeId = String(req.user._id);
@@ -172,6 +193,11 @@ async function adminUpdateTask(req, res) {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
+  const employee = await User.findById(task.employee);
+  if (ownerOutranksAdmin(employee?.role) && !isSuperAdmin(req.user)) {
+    return res.status(403).json({ error: 'Only a super admin can review an admin\'s task' });
+  }
+
   const update = pickWhitelisted(req.body, ADMIN_FIELDS);
   if (!validateEnumValue(res, 'adminStatus', update.adminStatus, ADMIN_STATUSES)) return;
 
@@ -184,7 +210,6 @@ async function adminUpdateTask(req, res) {
   Object.assign(task, update);
   await task.save();
 
-  const employee = await User.findById(task.employee);
   await recordAudit({
     actor: req.user,
     action: 'task.reviewed',
@@ -241,6 +266,8 @@ async function deleteTask(req, res) {
     if (task.createdBy !== 'employee') {
       return res.status(403).json({ error: 'You cannot delete a task assigned by an admin' });
     }
+  } else if (ownerOutranksAdmin(employee?.role) && !isSuperAdmin(req.user) && String(task.employee) !== String(req.user._id)) {
+    return res.status(403).json({ error: 'Only a super admin can delete another admin\'s task' });
   }
 
   await task.deleteOne();
