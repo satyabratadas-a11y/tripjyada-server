@@ -99,8 +99,12 @@ async function listTasks(req, res) {
     employeeId = String(req.user._id);
   }
 
+  // The monthly log is the permanent record, not a work-in-progress tracker — a task only earns
+  // its place here once the owner has actually marked it done, whether they self-added it or an
+  // admin assigned it. The live "Today" view (getToday) is unaffected and still shows everything.
   const tasks = await Task.find({
     employee: employeeId,
+    memberStatus: 'done',
     date: { $gte: startOfMonth(year, month), $lt: endOfMonthExclusive(year, month) },
   }).sort({ date: 1, createdAt: 1 });
 
