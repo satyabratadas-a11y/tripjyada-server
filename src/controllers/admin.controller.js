@@ -142,6 +142,11 @@ async function deleteUser(req, res) {
   // same last-super-admin guard so the platform can never end up with zero super admins.
   await protectFinalSuperAdmin(user, 'employee', 'disabled');
 
+  // Content-calendar membership references this user by id; leaving it behind would populate as
+  // null on every future client fetch (and crash anything reading fields off it), so drop it here
+  // rather than leaving a dangling reference for deletion to clean up later.
+  await Client.updateMany({ 'members.user': user._id }, { $pull: { members: { user: user._id } } });
+
   await user.deleteOne();
 
   await recordAudit({

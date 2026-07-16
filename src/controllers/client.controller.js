@@ -19,12 +19,16 @@ function serializeClient(client, req) {
     businessType: client.businessType,
     description: client.description,
     status: client.status,
-    members: client.members.map((m) => ({
-      user: m.user._id ? String(m.user._id) : String(m.user),
-      name: m.user.name || undefined,
-      email: m.user.email || undefined,
-      roleInClient: m.roleInClient,
-    })),
+    // A member's `user` populates to null if that account was since deleted (e.g. by the
+    // super-admin "Remove user" action) — drop those rather than crash reading off of null.
+    members: client.members
+      .filter((m) => m.user)
+      .map((m) => ({
+        user: m.user._id ? String(m.user._id) : String(m.user),
+        name: m.user.name || undefined,
+        email: m.user.email || undefined,
+        roleInClient: m.roleInClient,
+      })),
     myRole: effectiveRole,
     createdAt: client.createdAt,
     updatedAt: client.updatedAt,
