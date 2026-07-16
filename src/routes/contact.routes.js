@@ -20,9 +20,11 @@ router.use(requireAuth);
 
 router.post('/scan', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.scanCard));
 router.post('/', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.createContact));
-router.get('/mine', requireRole('b2b_agent'), asyncHandler(ctrl.listMine));
-router.get('/mine/export', requireRole('b2b_agent'), asyncHandler(ctrl.exportMine));
-router.get('/', requireRole('super_admin'), asyncHandler(ctrl.listAll));
+// Contacts are one shared pool, not per-agent silos — every B2B agent sees (and can export)
+// everyone's captures, the same list the super admin sees. Deleting stays restricted to your own
+// captures (or any, for a super admin) — see deleteContact.
+router.get('/', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.listAll));
+router.get('/export', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.exportContacts));
 router.delete('/:id', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.deleteContact));
 
 module.exports = router;

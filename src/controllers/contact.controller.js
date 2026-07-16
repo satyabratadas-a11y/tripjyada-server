@@ -126,27 +126,25 @@ async function createContact(req, res) {
   return res.status(201).json({ contact });
 }
 
-async function listMine(req, res) {
-  const contacts = await Contact.find({ capturedBy: req.user._id }).sort({ createdAt: -1 });
-  return res.json({ contacts });
-}
-
-async function exportMine(req, res) {
-  const contacts = await Contact.find({ capturedBy: req.user._id }).sort({ createdAt: -1 });
+// Contacts are one shared pool across every B2B agent (see findDuplicateContact above) — so this
+// export mirrors that: every agent and the super admin download the same full list, not a
+// per-agent subset.
+async function exportContacts(req, res) {
+  const contacts = await Contact.find({}).sort({ createdAt: -1 }).populate('capturedBy', 'name');
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Task Tracker';
   workbook.created = new Date();
 
-  const sheet = workbook.addWorksheet('My Contacts');
-  const header = sheet.addRow(['Date', 'Name', 'Company', 'Phone', 'Email', 'Address']);
+  const sheet = workbook.addWorksheet('B2B Contacts');
+  const header = sheet.addRow(['Date', 'Name', 'Company', 'Phone', 'Email', 'Address', 'Captured By']);
   header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   header.eachCell((cell) => {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } };
   });
 
   for (const c of contacts) {
-    sheet.addRow([c.createdAt.toISOString().slice(0, 10), c.name, c.company, c.phone, c.email, c.address]);
+    sheet.addRow([c.createdAt.toISOString().slice(0, 10), c.name, c.company, c.phone, c.email, c.address, c.capturedBy?.name || '']);
   }
 
   sheet.columns.forEach((col) => {
@@ -154,7 +152,7 @@ async function exportMine(req, res) {
   });
 
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="my-contacts-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  res.setHeader('Content-Disposition', `attachment; filename="b2b-contacts-${new Date().toISOString().slice(0, 10)}.xlsx"`);
 
   await workbook.xlsx.write(res);
   res.end();
@@ -198,4 +196,4 @@ async function deleteContact(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { scanCard, createContact, listMine, exportMine, listAll, deleteContact };
+module.exports = { scanCard, createContact, exportContacts, listAll, deleteContact };
