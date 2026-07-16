@@ -73,7 +73,10 @@ async function appendContactRow({ contact, agentName }) {
   await sheets.spreadsheets.values.append({
     spreadsheetId,
     range: `${sheetName}!A:L`,
-    valueInputOption: 'USER_ENTERED',
+    // RAW, not USER_ENTERED — a phone/note/address starting with "+" or "-" (e.g. an un-normalized
+    // "+91..." number, or a note like "-50% mentioned") gets parsed by Sheets as a formula under
+    // USER_ENTERED and lands as a literal #ERROR! cell instead of the text that was actually sent.
+    valueInputOption: 'RAW',
     insertDataOption: 'INSERT_ROWS',
     requestBody: {
       values: [
