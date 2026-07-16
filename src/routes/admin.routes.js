@@ -13,5 +13,6 @@ router.get('/users', requireRole('super_admin'), asyncHandler(ctrl.listUsers));
 router.get('/audit-logs', asyncHandler(ctrl.listAuditLogs));
 router.patch('/users/:id/approve', requireRole('super_admin'), asyncHandler(ctrl.approveUser));
 router.patch('/users/:id', requireRole('super_admin'), asyncHandler(ctrl.updateUser));
+router.delete('/users/:id', requireRole('super_admin'), asyncHandler(ctrl.deleteUser));
 
 module.exports = router;

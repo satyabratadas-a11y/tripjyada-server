@@ -128,6 +128,35 @@ async function updateUser(req, res) {
   return res.json({ user: user.toSafeJSON() });
 }
 
+async function deleteUser(req, res) {
+  const { id } = req.params;
+
+  const user = await User.findById(id);
+  if (!user) return res.status(404).json({ error: 'User not found' });
+
+  if (String(user._id) === String(req.user._id)) {
+    return res.status(400).json({ error: 'You cannot remove your own account' });
+  }
+
+  // Removing a user is a stronger version of "loses super_admin and goes inactive" — reuse the
+  // same last-super-admin guard so the platform can never end up with zero super admins.
+  await protectFinalSuperAdmin(user, 'employee', 'disabled');
+
+  await user.deleteOne();
+
+  await recordAudit({
+    actor: req.user,
+    action: 'user.removed',
+    targetType: 'user',
+    targetId: user._id,
+    targetLabel: user.name,
+    summary: `Removed ${user.name}'s account`,
+    metadata: { email: user.email, role: user.role },
+  });
+
+  return res.status(204).send();
+}
+
 async function listAuditLogs(req, res) {
   const rawLimit = parseInt(req.query.limit, 10);
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
@@ -447,4 +476,4 @@ async function getSuperDashboard(req, res) {
   });
 }
 
-module.exports = { listUsers, approveUser, updateUser, listAuditLogs, getSuperDashboard };
+module.exports = { listUsers, approveUser, updateUser, deleteUser, listAuditLogs, getSuperDashboard };

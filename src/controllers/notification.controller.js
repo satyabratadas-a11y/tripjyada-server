@@ -2,7 +2,8 @@ const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const ContentEntry = require('../models/ContentEntry');
 const Task = require('../models/Task');
-const { isAdminLike } = require('../utils/roles');
+const User = require('../models/User');
+const { isAdminLike, isSuperAdmin } = require('../utils/roles');
 
 function serialize(n) {
   return {
@@ -150,11 +151,29 @@ async function buildTaskAlerts(user) {
   return buildEmployeeTaskAlerts(user._id);
 }
 
+// Only a super admin can approve signups, so this alert is scoped to that role — anyone else
+// seeing "new account awaiting approval" would have no way to act on it.
+async function buildPendingSignupAlerts() {
+  const pendingUsers = await User.find({ status: 'pending' }).sort({ createdAt: -1 }).limit(40);
+
+  return pendingUsers.map((u) => ({
+    id: `signup-${u._id}`,
+    type: 'signup_pending',
+    message: `${u.name} just signed up and is awaiting your approval to access the platform.`,
+    link: '/admin/users',
+    client: null,
+    entry: null,
+    read: false,
+    createdAt: u.createdAt,
+  }));
+}
+
 async function listNotifications(req, res) {
   const persisted = await Notification.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(100);
   const dueSoon = await buildDueSoon(req.user._id);
   const taskAlerts = await buildTaskAlerts(req.user);
-  const notifications = sortNotifications([...dueSoon, ...taskAlerts, ...persisted.map(serialize)]);
+  const signupAlerts = isSuperAdmin(req.user) ? await buildPendingSignupAlerts() : [];
+  const notifications = sortNotifications([...dueSoon, ...taskAlerts, ...signupAlerts, ...persisted.map(serialize)]);
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return res.json({

@@ -8,6 +8,7 @@ const NOTIFICATION_TYPES = [
   'rejected',
   'comment',
   'due_soon',
+  'signup_pending',
 ];
 
 const notificationSchema = new mongoose.Schema(
