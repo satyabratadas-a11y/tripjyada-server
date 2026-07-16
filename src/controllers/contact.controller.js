@@ -3,6 +3,7 @@ const Contact = require('../models/Contact');
 const { isSuperAdmin } = require('../utils/roles');
 const { extractCardFields } = require('../utils/gemini');
 const { recordAudit } = require('../utils/audit');
+const { appendContactRow } = require('../utils/googleSheets');
 
 const CONTACT_FIELDS = ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address', 'notes', 'rawOcrText'];
 
@@ -114,6 +115,12 @@ async function createContact(req, res) {
     capturedBy: req.user._id,
     imageUrl,
     backImageUrl,
+  });
+
+  // Fire-and-forget, same as the assignment/review emails elsewhere — a Sheets hiccup shouldn't
+  // fail the save, and it silently no-ops entirely until GOOGLE_SHEETS_ID etc. are configured.
+  appendContactRow({ contact, agentName: req.user.name }).catch((err) => {
+    console.error('[sheets] failed to append contact row:', err.message);
   });
 
   return res.status(201).json({ contact });
