@@ -54,12 +54,20 @@ function sortNotifications(items) {
   return [...items].sort((a, b) => notificationTimestamp(b.createdAt) - notificationTimestamp(a.createdAt));
 }
 
+// Ephemeral alerts (due-soon, task reminders, pending signups) have no stored `read` flag to flip,
+// so "mark all read" instead records a timestamp — anything generated at or before it counts read,
+// while anything newer (e.g. a task flagged again after the last clear) still shows as unread.
+function isClearedBefore(date, user) {
+  if (!user.notificationsClearedAt) return false;
+  return new Date(date).getTime() <= new Date(user.notificationsClearedAt).getTime();
+}
+
 /** "Due soon" reminders are computed live on every fetch rather than persisted — no cron needed. */
-async function buildDueSoon(userId) {
+async function buildDueSoon(user) {
   const now = new Date();
   const soon = new Date(now.getTime() + 24 * 60 * 60 * 1000);
   const entries = await ContentEntry.find({
-    assignee: userId,
+    assignee: user._id,
     date: { $gte: now, $lte: soon },
     status: { $nin: ['Scheduled', 'Published'] },
   })
@@ -73,7 +81,7 @@ async function buildDueSoon(userId) {
     link: `/content/${e.client}/table`,
     client: e.client,
     entry: e._id,
-    read: false,
+    read: isClearedBefore(e.date, user),
     createdAt: e.date,
   }));
 }
@@ -86,7 +94,7 @@ function shouldAlertAdminForPendingTask(task) {
   return false;
 }
 
-async function buildAdminTaskAlerts() {
+async function buildAdminTaskAlerts(user) {
   const tasks = await Task.find({
     adminStatus: { $in: ['pending', 'flagged'] },
     date: { $lt: endOfTodayUTC() },
@@ -102,6 +110,7 @@ async function buildAdminTaskAlerts() {
       const taskName = formatTaskLabel(task.assignedTask);
       const employeeName = task.employee.name || 'An employee';
       const taskDate = formatTaskDate(task.date);
+      const createdAt = task.updatedAt || task.createdAt || task.date;
 
       return {
         id: `task-${task.adminStatus}-${task._id}`,
@@ -113,15 +122,15 @@ async function buildAdminTaskAlerts() {
         link: buildAdminTaskLink(task),
         client: null,
         entry: null,
-        read: false,
-        createdAt: task.updatedAt || task.createdAt || task.date,
+        read: isClearedBefore(createdAt, user),
+        createdAt,
       };
     });
 }
 
-async function buildEmployeeTaskAlerts(userId) {
+async function buildEmployeeTaskAlerts(user) {
   const tasks = await Task.find({
-    employee: userId,
+    employee: user._id,
     adminStatus: 'flagged',
     date: { $lt: endOfTodayUTC() },
   })
@@ -132,6 +141,7 @@ async function buildEmployeeTaskAlerts(userId) {
     const taskName = formatTaskLabel(task.assignedTask);
     const baseMessage = `Your task "${taskName}" was flagged for ${formatTaskDate(task.date)}.`;
     const note = String(task.reviewerNotes || '').trim();
+    const createdAt = task.updatedAt || task.createdAt || task.date;
 
     return {
       id: `task-flagged-${task._id}`,
@@ -140,20 +150,20 @@ async function buildEmployeeTaskAlerts(userId) {
       link: '/employee/log',
       client: null,
       entry: null,
-      read: false,
-      createdAt: task.updatedAt || task.createdAt || task.date,
+      read: isClearedBefore(createdAt, user),
+      createdAt,
     };
   });
 }
 
 async function buildTaskAlerts(user) {
-  if (isAdminLike(user)) return buildAdminTaskAlerts();
-  return buildEmployeeTaskAlerts(user._id);
+  if (isAdminLike(user)) return buildAdminTaskAlerts(user);
+  return buildEmployeeTaskAlerts(user);
 }
 
 // Only a super admin can approve signups, so this alert is scoped to that role — anyone else
 // seeing "new account awaiting approval" would have no way to act on it.
-async function buildPendingSignupAlerts() {
+async function buildPendingSignupAlerts(user) {
   const pendingUsers = await User.find({ status: 'pending' }).sort({ createdAt: -1 }).limit(40);
 
   return pendingUsers.map((u) => ({
@@ -163,16 +173,16 @@ async function buildPendingSignupAlerts() {
     link: '/admin/users',
     client: null,
     entry: null,
-    read: false,
+    read: isClearedBefore(u.createdAt, user),
     createdAt: u.createdAt,
   }));
 }
 
 async function listNotifications(req, res) {
   const persisted = await Notification.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(100);
-  const dueSoon = await buildDueSoon(req.user._id);
+  const dueSoon = await buildDueSoon(req.user);
   const taskAlerts = await buildTaskAlerts(req.user);
-  const signupAlerts = isSuperAdmin(req.user) ? await buildPendingSignupAlerts() : [];
+  const signupAlerts = isSuperAdmin(req.user) ? await buildPendingSignupAlerts(req.user) : [];
   const notifications = sortNotifications([...dueSoon, ...taskAlerts, ...signupAlerts, ...persisted.map(serialize)]);
   const unreadCount = notifications.filter((n) => !n.read).length;
 
@@ -193,6 +203,8 @@ async function markRead(req, res) {
 
 async function markAllRead(req, res) {
   await Notification.updateMany({ user: req.user._id, read: false }, { $set: { read: true } });
+  req.user.notificationsClearedAt = new Date();
+  await req.user.save();
   return res.status(204).send();
 }
 

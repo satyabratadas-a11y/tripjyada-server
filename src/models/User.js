@@ -14,6 +14,10 @@ const userSchema = new mongoose.Schema(
     role: { type: String, enum: USER_ROLES, default: 'employee' },
     jobTitle: { type: String, trim: true, default: '' },
     status: { type: String, enum: ['pending', 'active', 'disabled'], default: 'pending' },
+    // Ephemeral notifications (task reminders, due-soon, pending signups) are computed live from
+    // real state rather than stored — "mark all read" can't flip a `read` flag on them, so instead
+    // it records this timestamp and anything generated at or before it counts as read.
+    notificationsClearedAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
