@@ -22,7 +22,7 @@ router.post('/scan', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.sca
 router.post('/', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.createContact));
 router.get('/mine', requireRole('b2b_agent'), asyncHandler(ctrl.listMine));
 router.get('/mine/export', requireRole('b2b_agent'), asyncHandler(ctrl.exportMine));
-router.get('/', requireRole('admin'), asyncHandler(ctrl.listAll));
-router.delete('/:id', requireRole('b2b_agent', 'admin'), asyncHandler(ctrl.deleteContact));
+router.get('/', requireRole('super_admin'), asyncHandler(ctrl.listAll));
+router.delete('/:id', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.deleteContact));
 
 module.exports = router;

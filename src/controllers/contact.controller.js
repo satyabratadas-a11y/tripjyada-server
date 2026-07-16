@@ -1,6 +1,6 @@
 const ExcelJS = require('exceljs');
 const Contact = require('../models/Contact');
-const { isAdminLike } = require('../utils/roles');
+const { isSuperAdmin } = require('../utils/roles');
 const { extractCardFields } = require('../utils/gemini');
 const { recordAudit } = require('../utils/audit');
 
@@ -106,13 +106,13 @@ async function deleteContact(req, res) {
   const contact = await Contact.findById(req.params.id);
   if (!contact) return res.status(404).json({ error: 'Contact not found' });
 
-  if (!isAdminLike(req.user) && String(contact.capturedBy) !== String(req.user._id)) {
+  if (!isSuperAdmin(req.user) && String(contact.capturedBy) !== String(req.user._id)) {
     return res.status(403).json({ error: 'You can only delete your own captured contacts' });
   }
 
   await contact.deleteOne();
 
-  if (isAdminLike(req.user)) {
+  if (isSuperAdmin(req.user)) {
     await recordAudit({
       actor: req.user,
       action: 'contact.deleted',
