@@ -6,6 +6,59 @@ const { recordAudit } = require('../utils/audit');
 
 const CONTACT_FIELDS = ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address', 'notes', 'rawOcrText'];
 
+// Contacts are one shared pool across every B2B agent, not per-agent silos — so "is this a
+// duplicate" has to check everyone's captures, not just the current agent's own. The scanner (and
+// manual entry) can pack multiple "/"-separated numbers/emails from one card into a single field
+// (see utils/gemini.js), and OCR/formatting varies (+91 prefixes, spacing), so matching compares
+// normalized individual values rather than the raw strings.
+function normalizedPhones(phoneField) {
+  if (!phoneField) return [];
+  return phoneField
+    .split('/')
+    .map((p) => p.replace(/\D/g, ''))
+    .map((digits) => digits.slice(-10))
+    .filter((digits) => digits.length >= 7);
+}
+
+function normalizedEmails(emailField) {
+  if (!emailField) return [];
+  return emailField
+    .split('/')
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function serializeDuplicate(contact) {
+  return {
+    id: contact._id,
+    name: contact.name,
+    company: contact.company,
+    capturedBy: contact.capturedBy?.name || '',
+    createdAt: contact.createdAt,
+  };
+}
+
+async function findDuplicateContact({ phone, email, excludeId }) {
+  const phones = normalizedPhones(phone);
+  const emails = normalizedEmails(email);
+  if (phones.length === 0 && emails.length === 0) return null;
+
+  const query = { $or: [{ phone: { $nin: ['', null] } }, { email: { $nin: ['', null] } }] };
+  if (excludeId) query._id = { $ne: excludeId };
+
+  const candidates = await Contact.find(query)
+    .select('name company phone email capturedBy createdAt')
+    .populate('capturedBy', 'name');
+
+  return (
+    candidates.find((c) => {
+      const cPhones = normalizedPhones(c.phone);
+      const cEmails = normalizedEmails(c.email);
+      return phones.some((p) => cPhones.includes(p)) || emails.some((e) => cEmails.includes(e));
+    }) || null
+  );
+}
+
 async function scanCard(req, res) {
   const requestStartedAt = Date.now();
   const frontFile = req.files?.image?.[0];
@@ -19,8 +72,9 @@ async function scanCard(req, res) {
   if (backFile) images.push({ buffer: backFile.buffer, mimeType: backFile.mimetype });
 
   const fields = await extractCardFields(images);
+  const duplicate = await findDuplicateContact({ phone: fields.phone, email: fields.email });
   console.log(`[scanCard] request handled in ${Date.now() - requestStartedAt}ms`);
-  return res.json({ fields });
+  return res.json({ fields, duplicate: duplicate ? serializeDuplicate(duplicate) : null });
 }
 
 function pickContactFields(body) {
@@ -40,6 +94,16 @@ async function createContact(req, res) {
   // least one identifying field, or there's nothing to save.
   if (!frontFile && !fields.name && !fields.company && !fields.phone && !fields.email) {
     return res.status(400).json({ error: 'Enter at least a name, company, phone, or email' });
+  }
+
+  const duplicate = await findDuplicateContact({ phone: fields.phone, email: fields.email });
+  if (duplicate) {
+    return res.status(409).json({
+      error: `Already saved — matches ${duplicate.name || duplicate.company || 'a contact'} captured by ${
+        duplicate.capturedBy?.name || 'someone'
+      } on ${new Date(duplicate.createdAt).toLocaleDateString()}.`,
+      duplicate: serializeDuplicate(duplicate),
+    });
   }
 
   const imageUrl = frontFile ? `data:${frontFile.mimetype};base64,${frontFile.buffer.toString('base64')}` : '';
