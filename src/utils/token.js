@@ -1,10 +1,14 @@
 const jwt = require('jsonwebtoken');
 
 const COOKIE_NAME = 'token';
+// The cookie's maxAge is kept in lockstep with the JWT's own expiry — if the cookie outlived the
+// token, the browser would keep sending an expired token; if the token outlived the cookie, a
+// valid session would vanish client-side before it actually expired.
+const SESSION_MS = 24 * 60 * 60 * 1000;
 
 function signToken(user) {
   return jwt.sign({ sub: user._id.toString(), role: user.role }, process.env.JWT_SECRET, {
-    expiresIn: process.env.JWT_EXPIRES_IN || '7d',
+    expiresIn: process.env.JWT_EXPIRES_IN || '1d',
   });
 }
 
@@ -16,7 +20,7 @@ function setAuthCookie(res, token) {
     // cross-origin (client on Vercel, API on Render/Fly) requires SameSite=None,
     // which browsers only accept alongside Secure — hence tied to isProd.
     sameSite: isProd ? 'none' : 'lax',
-    maxAge: 7 * 24 * 60 * 60 * 1000,
+    maxAge: SESSION_MS,
   });
 }
 
