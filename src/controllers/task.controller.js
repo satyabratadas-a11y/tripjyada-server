@@ -102,11 +102,17 @@ async function listTasks(req, res) {
   // The monthly log is the permanent record, not a work-in-progress tracker — a task only earns
   // its place here once the owner has actually marked it done, whether they self-added it or an
   // admin assigned it. The live "Today" view (getToday) is unaffected and still shows everything.
-  const tasks = await Task.find({
+  // A super admin's monthly oversight view opts back into everything via ?allStatuses=true, since
+  // spotting flagged/in-progress work across the team is exactly what that view is for.
+  const filter = {
     employee: employeeId,
-    memberStatus: 'done',
     date: { $gte: startOfMonth(year, month), $lt: endOfMonthExclusive(year, month) },
-  }).sort({ date: 1, createdAt: 1 });
+  };
+  if (!(req.query.allStatuses === 'true' && isSuperAdmin(req.user))) {
+    filter.memberStatus = 'done';
+  }
+
+  const tasks = await Task.find(filter).sort({ date: 1, createdAt: 1 });
 
   return res.json({ tasks });
 }
