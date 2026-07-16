@@ -6,6 +6,7 @@ const userSchema = new mongoose.Schema(
   {
     name: { type: String, required: true, trim: true },
     email: { type: String, required: true, unique: true, lowercase: true, trim: true },
+    phone: { type: String, trim: true, default: '' },
     employeeCode: { type: String, trim: true, unique: true, sparse: true },
     googleId: { type: String, trim: true, default: '' },
     avatarUrl: { type: String, trim: true, default: '' },
@@ -31,6 +32,7 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
     id: this._id,
     name: this.name,
     email: this.email,
+    phone: this.phone || '',
     employeeCode: this.employeeCode || '',
     avatarUrl: this.avatarUrl || '',
     role: this.role,
