@@ -10,6 +10,10 @@ const contactSchema = new mongoose.Schema(
     email: { type: String, trim: true, default: '' },
     website: { type: String, trim: true, default: '' },
     address: { type: String, trim: true, default: '' },
+    // Split out from `address` (rather than parsed from it) specifically so the export matches
+    // the column structure Mailer Cloud's bulk-contact import expects.
+    state: { type: String, trim: true, default: '' },
+    pincode: { type: String, trim: true, default: '' },
     notes: { type: String, trim: true, default: '' },
     rawOcrText: { type: String, default: '' },
     // A data: URI (base64) — the card photo is stored directly in Mongo rather than a third-party

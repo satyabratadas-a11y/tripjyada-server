@@ -5,7 +5,31 @@ const { extractCardFields } = require('../utils/gemini');
 const { recordAudit } = require('../utils/audit');
 const { appendContactRow } = require('../utils/googleSheets');
 
-const CONTACT_FIELDS = ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address', 'notes', 'rawOcrText'];
+const CONTACT_FIELDS = [
+  'name',
+  'company',
+  'jobTitle',
+  'phone',
+  'email',
+  'website',
+  'address',
+  'state',
+  'pincode',
+  'notes',
+  'rawOcrText',
+];
+
+// Required for every contact regardless of how it was captured (scan, bulk, or manual) — this is
+// the field set Mailer Cloud's bulk-import needs populated to be usable for email marketing later.
+const MANDATORY_FIELDS = ['company', 'email', 'phone', 'address', 'state', 'pincode'];
+const MANDATORY_FIELD_LABELS = {
+  company: 'business name',
+  email: 'email',
+  phone: 'phone number',
+  address: 'address',
+  state: 'state',
+  pincode: 'pincode',
+};
 
 // Contacts are one shared pool across every B2B agent, not per-agent silos — so "is this a
 // duplicate" has to check everyone's captures, not just the current agent's own. The scanner (and
@@ -19,6 +43,13 @@ function normalizedPhones(phoneField) {
     .map((p) => p.replace(/\D/g, ''))
     .map((digits) => digits.slice(-10))
     .filter((digits) => digits.length >= 7);
+}
+
+// Strips the +91 country code (or any other prefix digits beyond the last 10) so only the bare
+// 10-digit number is ever stored — applied on scan review and again on save, so it holds no
+// matter whether the number came from the OCR, a manual edit, or manual entry from scratch.
+function cleanPhoneField(phoneField) {
+  return normalizedPhones(phoneField).join(' / ');
 }
 
 function normalizedEmails(emailField) {
@@ -73,6 +104,7 @@ async function scanCard(req, res) {
   if (backFile) images.push({ buffer: backFile.buffer, mimeType: backFile.mimetype });
 
   const fields = await extractCardFields(images);
+  fields.phone = cleanPhoneField(fields.phone);
   const duplicate = await findDuplicateContact({ phone: fields.phone, email: fields.email });
   console.log(`[scanCard] request handled in ${Date.now() - requestStartedAt}ms`);
   return res.json({ fields, duplicate: duplicate ? serializeDuplicate(duplicate) : null });
@@ -90,11 +122,13 @@ async function createContact(req, res) {
   const frontFile = req.files?.image?.[0];
   const backFile = req.files?.backImage?.[0];
   const fields = pickContactFields(req.body);
+  if (fields.phone) fields.phone = cleanPhoneField(fields.phone);
 
-  // A scanned card always has a photo; a manually-entered contact has none — but it still needs at
-  // least one identifying field, or there's nothing to save.
-  if (!frontFile && !fields.name && !fields.company && !fields.phone && !fields.email) {
-    return res.status(400).json({ error: 'Enter at least a name, company, phone, or email' });
+  const missing = MANDATORY_FIELDS.filter((field) => !fields[field]?.trim());
+  if (missing.length > 0) {
+    return res.status(400).json({
+      error: `Enter the ${missing.map((field) => MANDATORY_FIELD_LABELS[field]).join(', ')} before saving.`,
+    });
   }
 
   const duplicate = await findDuplicateContact({ phone: fields.phone, email: fields.email });
@@ -137,14 +171,24 @@ async function exportContacts(req, res) {
   workbook.created = new Date();
 
   const sheet = workbook.addWorksheet('B2B Contacts');
-  const header = sheet.addRow(['Date', 'Name', 'Company', 'Phone', 'Email', 'Address', 'Captured By']);
+  const header = sheet.addRow(['Date', 'Name', 'Company', 'Phone', 'Email', 'Address', 'State', 'Pincode', 'Captured By']);
   header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   header.eachCell((cell) => {
     cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F3864' } };
   });
 
   for (const c of contacts) {
-    sheet.addRow([c.createdAt.toISOString().slice(0, 10), c.name, c.company, c.phone, c.email, c.address, c.capturedBy?.name || '']);
+    sheet.addRow([
+      c.createdAt.toISOString().slice(0, 10),
+      c.name,
+      c.company,
+      c.phone,
+      c.email,
+      c.address,
+      c.state,
+      c.pincode,
+      c.capturedBy?.name || '',
+    ]);
   }
 
   sheet.columns.forEach((col) => {

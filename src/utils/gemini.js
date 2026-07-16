@@ -12,8 +12,10 @@ const CARD_FIELD_SCHEMA = {
     email: { type: 'string' },
     website: { type: 'string' },
     address: { type: 'string' },
+    state: { type: 'string' },
+    pincode: { type: 'string' },
   },
-  required: ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address'],
+  required: ['name', 'company', 'jobTitle', 'phone', 'email', 'website', 'address', 'state', 'pincode'],
 };
 
 function isGeminiEnabled() {
@@ -70,6 +72,7 @@ async function extractCardFields(images) {
               'If more than one phone number is shown (e.g. primary and secondary), include all of them in "phone", separated by " / ".',
               'Return the company name as printed (including any stylized logo text), not the job title or tagline.',
               'Transcribe the email address and website exactly as printed, character for character, even if part of it looks like a typo or misspelling (e.g. a missing letter) — do NOT "correct" or normalize it, since these values must work as-is to actually reach the business.',
+              'Separately from "address" (the street/building line), also extract "state" and "pincode" (postal/zip code) from wherever they appear in the printed address — these are used as their own fields, not folded into "address".',
             ].join(' '),
           },
           ...images.map((img) => ({

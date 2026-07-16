@@ -1,6 +1,19 @@
 const { google } = require('googleapis');
 
-const SHEET_HEADER = ['Date', 'Name', 'Company', 'Job Title', 'Phone', 'Email', 'Website', 'Address', 'Notes', 'Captured By'];
+const SHEET_HEADER = [
+  'Date',
+  'Name',
+  'Company',
+  'Job Title',
+  'Phone',
+  'Email',
+  'Website',
+  'Address',
+  'State',
+  'Pincode',
+  'Notes',
+  'Captured By',
+];
 
 function isSheetsEnabled() {
   return Boolean(
@@ -34,11 +47,14 @@ let headerEnsured = false;
 
 async function ensureHeaderRow(sheets, spreadsheetId, sheetName) {
   if (headerEnsured) return;
-  const existing = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!A1:J1` });
-  if (!existing.data.values?.[0]?.length) {
+  const existing = await sheets.spreadsheets.values.get({ spreadsheetId, range: `${sheetName}!A1:L1` });
+  const currentHeader = existing.data.values?.[0] || [];
+  // Also re-writes if a header is present but stale (an older version of this code wrote fewer
+  // columns) — comparing lengths is enough to catch that without clobbering a genuinely blank row.
+  if (currentHeader.length < SHEET_HEADER.length) {
     await sheets.spreadsheets.values.update({
       spreadsheetId,
-      range: `${sheetName}!A1:J1`,
+      range: `${sheetName}!A1:L1`,
       valueInputOption: 'RAW',
       requestBody: { values: [SHEET_HEADER] },
     });
@@ -56,7 +72,7 @@ async function appendContactRow({ contact, agentName }) {
   await ensureHeaderRow(sheets, spreadsheetId, sheetName);
   await sheets.spreadsheets.values.append({
     spreadsheetId,
-    range: `${sheetName}!A:J`,
+    range: `${sheetName}!A:L`,
     valueInputOption: 'USER_ENTERED',
     insertDataOption: 'INSERT_ROWS',
     requestBody: {
@@ -70,6 +86,8 @@ async function appendContactRow({ contact, agentName }) {
           contact.email,
           contact.website,
           contact.address,
+          contact.state,
+          contact.pincode,
           contact.notes,
           agentName || '',
         ],
