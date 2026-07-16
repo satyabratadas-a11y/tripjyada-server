@@ -152,7 +152,7 @@ async function downloadMonthlyReport(req, res) {
       r.onProgress,
       r.incomplete,
       r.flags,
-      `${r.progressPct}%`,
+      r.progressPct,
       r.integrity,
     ]);
   }
@@ -165,13 +165,35 @@ async function downloadMonthlyReport(req, res) {
     team.onProgress,
     team.incomplete,
     team.flags,
-    `${team.progressPct}%`,
+    team.progressPct,
     team.flags > 0 ? `${team.flags} flag(s)` : 'All clear',
   ]);
   teamRow.font = { bold: true };
 
   summary.columns.forEach((col) => {
     col.width = 16;
+  });
+  // Progress % (column H) as a real number rather than a "83%" string, so it can drive a native
+  // Excel data-bar chart below — a plain data label would sort/filter fine but can't be a graph.
+  summary.getColumn(8).numFmt = '0.0"%"';
+
+  const firstDataRow = 4;
+  const lastDataRow = firstDataRow + rows.length; // includes the TEAM AVERAGE row
+  summary.addConditionalFormatting({
+    ref: `H${firstDataRow}:H${lastDataRow}`,
+    rules: [
+      {
+        type: 'dataBar',
+        priority: 1,
+        cfvo: [
+          { type: 'num', value: 0 },
+          { type: 'num', value: 100 },
+        ],
+        color: { argb: 'FF34A853' },
+        border: true,
+        showValue: true,
+      },
+    ],
   });
 
   for (const r of rows) {
