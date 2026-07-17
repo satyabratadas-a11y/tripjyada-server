@@ -15,16 +15,29 @@ const SHEET_HEADER = [
   'Captured By',
 ];
 
-function isSheetsEnabled() {
-  return Boolean(
-    process.env.GOOGLE_SHEETS_ID && process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_SERVICE_ACCOUNT_KEY
-  );
+const REQUIRED_ENV_VARS = ['GOOGLE_SHEETS_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_SERVICE_ACCOUNT_KEY'];
+
+function missingSheetsEnvVars() {
+  return REQUIRED_ENV_VARS.filter((key) => !process.env[key]);
 }
 
-// The private key is a multi-line PEM block, which env vars can't hold with real newlines — it's
-// stored with literal "\n" escapes and unescaped here.
+function isSheetsEnabled() {
+  return missingSheetsEnvVars().length === 0;
+}
+
+// The private key is a multi-line PEM block. Env vars can't hold real newlines, so it's normally
+// stored with literal "\n" escapes and unescaped here — but that format is fragile to carry
+// through copy/paste into a host's env-var UI (any dropped/doubled backslash silently corrupts
+// the key, which is exactly what caused repeated "DECODER routines::unsupported" errors even
+// though the same key string worked fine tested directly). If the value is base64 instead (no
+// backslashes or newlines to mangle at all), decode it; otherwise fall back to the "\n" literal.
 function getPrivateKey() {
-  return process.env.GOOGLE_SERVICE_ACCOUNT_KEY.replace(/\\n/g, '\n');
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_KEY.trim();
+  if (!raw.includes('BEGIN PRIVATE KEY')) {
+    const decoded = Buffer.from(raw, 'base64').toString('utf8');
+    if (decoded.includes('BEGIN PRIVATE KEY')) return decoded;
+  }
+  return raw.replace(/\\n/g, '\n');
 }
 
 let sheetsClientPromise;
@@ -99,4 +112,4 @@ async function appendContactRow({ contact, agentName }) {
   });
 }
 
-module.exports = { isSheetsEnabled, appendContactRow };
+module.exports = { isSheetsEnabled, missingSheetsEnvVars, appendContactRow };
