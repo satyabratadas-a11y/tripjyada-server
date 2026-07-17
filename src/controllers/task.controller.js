@@ -47,6 +47,12 @@ function validateEnumValue(res, field, value, allowed) {
  * older entry in the monthly log — so unfinished work keeps surfacing here instead of getting
  * stranded on a date nobody revisits. Browsing a specific past day via ?date= is a historical
  * lookup, not the live worklist, so it only shows that day's own tasks.
+ *
+ * On top of that, an owner's own live view (?scope=own — an employee's personal list, or an
+ * admin's own "My Today") drops a task the moment it's resolved (Done or Not Done): once there's
+ * nothing left to act on, it belongs in the monthly log, not the actionable worklist. The
+ * cross-employee oversight grid (admin/super admin browsing everyone) keeps showing today's
+ * done work too, since that's exactly what a reviewer needs to verify same-day.
  */
 async function getToday(req, res) {
   const { start, end } = dayRangeUTC(req.query.date);
@@ -62,9 +68,19 @@ async function getToday(req, res) {
 
   const employeeFilter = { employee: { $in: employees.map((e) => e._id) } };
   const dateFilter = { date: { $gte: start, $lt: end } };
-  const filter = isLiveToday
-    ? { ...employeeFilter, $or: [dateFilter, { memberStatus: 'on_progress' }] }
-    : { ...employeeFilter, ...dateFilter };
+
+  let filter;
+  if (!isLiveToday) {
+    filter = { ...employeeFilter, ...dateFilter };
+  } else if (ownOnly) {
+    filter = {
+      ...employeeFilter,
+      memberStatus: { $nin: ['done', 'not_done'] },
+      $or: [dateFilter, { memberStatus: 'on_progress' }],
+    };
+  } else {
+    filter = { ...employeeFilter, $or: [dateFilter, { memberStatus: 'on_progress' }] };
+  }
 
   const tasks = await Task.find(filter).sort({ createdAt: 1 });
 
@@ -169,12 +185,20 @@ async function createOrAssignTask(req, res) {
   return res.status(201).json({ task });
 }
 
-/** Employee-only: adds a task for themselves. They own every field on tasks they create. */
+/**
+ * Employee-only: adds a task for themselves, always for today. Self-adding for a past or future
+ * date would let a forgotten day get backfilled after the fact instead of being an honest,
+ * same-day record — an admin assigning a task for another date is a separate route and unaffected.
+ */
 async function employeeCreateTask(req, res) {
   const { date, assignedTask, brief, proofLink, memberStatus } = req.body;
   const trimmedAssignedTask = assignedTask?.trim();
   if (!date || !trimmedAssignedTask) {
     return res.status(400).json({ error: 'date and assignedTask are required' });
+  }
+  const todayKey = new Date().toISOString().slice(0, 10);
+  if (String(date).slice(0, 10) !== todayKey) {
+    return res.status(400).json({ error: 'You can only add a task for today' });
   }
   if (!validateEnumValue(res, 'memberStatus', memberStatus, MEMBER_STATUSES)) return;
 
