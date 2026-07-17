@@ -15,7 +15,7 @@ function ownerOutranksAdmin(ownerRole) {
 }
 
 const ADMIN_STATUSES = ['pending', 'completed', 'on_progress', 'incomplete', 'flagged'];
-const MEMBER_STATUSES = ['not_started', 'on_progress', 'done'];
+const MEMBER_STATUSES = ['not_started', 'on_progress', 'done', 'not_done'];
 
 function dayRangeUTC(dateStr) {
   const base = dateStr ? new Date(dateStr) : new Date();
@@ -99,18 +99,14 @@ async function listTasks(req, res) {
     employeeId = String(req.user._id);
   }
 
-  // The monthly log is the permanent record, not a work-in-progress tracker — a task only earns
-  // its place here once the owner has actually marked it done, whether they self-added it or an
-  // admin assigned it. The live "Today" view (getToday) is unaffected and still shows everything.
-  // A super admin's monthly oversight view opts back into everything via ?allStatuses=true, since
-  // spotting flagged/in-progress work across the team is exactly what that view is for.
+  // A task lands in the monthly log the day it's added, regardless of memberStatus — waiting for
+  // "done" meant a task the owner forgot to mark done just vanished from their record instead of
+  // sitting there as a visible on-progress (or not-done) entry. The live "Today" view (getToday)
+  // shows the same set for the current day, just scoped differently.
   const filter = {
     employee: employeeId,
     date: { $gte: startOfMonth(year, month), $lt: endOfMonthExclusive(year, month) },
   };
-  if (!(req.query.allStatuses === 'true' && isSuperAdmin(req.user))) {
-    filter.memberStatus = 'done';
-  }
 
   const tasks = await Task.find(filter).sort({ date: 1, createdAt: 1 });
 

@@ -21,7 +21,7 @@ const taskSchema = new mongoose.Schema(
     proofLink: { type: String, trim: true, default: '' },
     memberStatus: {
       type: String,
-      enum: ['not_started', 'on_progress', 'done'],
+      enum: ['not_started', 'on_progress', 'done', 'not_done'],
       default: 'not_started',
     },
   },
