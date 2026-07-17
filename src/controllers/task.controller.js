@@ -41,10 +41,17 @@ function validateEnumValue(res, field, value, allowed) {
  * overridden with ?date=YYYY-MM-DD to browse any day); an employee always sees only their own.
  * ?scope=own forces the caller's own tasks instead — used by an admin's personal "My Today" page,
  * since an admin-like caller would otherwise get the cross-employee oversight grid.
+ *
+ * The live "today" view (no ?date= override) also carries forward any task still On Progress
+ * from an earlier day — whether it was left that way originally or was reopened by editing an
+ * older entry in the monthly log — so unfinished work keeps surfacing here instead of getting
+ * stranded on a date nobody revisits. Browsing a specific past day via ?date= is a historical
+ * lookup, not the live worklist, so it only shows that day's own tasks.
  */
 async function getToday(req, res) {
   const { start, end } = dayRangeUTC(req.query.date);
   const ownOnly = req.query.scope === 'own';
+  const isLiveToday = !req.query.date;
 
   let employees;
   if (isAdminLike(req.user) && !ownOnly) {
@@ -53,10 +60,13 @@ async function getToday(req, res) {
     employees = [req.user];
   }
 
-  const tasks = await Task.find({
-    employee: { $in: employees.map((e) => e._id) },
-    date: { $gte: start, $lt: end },
-  }).sort({ createdAt: 1 });
+  const employeeFilter = { employee: { $in: employees.map((e) => e._id) } };
+  const dateFilter = { date: { $gte: start, $lt: end } };
+  const filter = isLiveToday
+    ? { ...employeeFilter, $or: [dateFilter, { memberStatus: 'on_progress' }] }
+    : { ...employeeFilter, ...dateFilter };
+
+  const tasks = await Task.find(filter).sort({ createdAt: 1 });
 
   const tasksByEmployee = new Map();
   for (const t of tasks) {
