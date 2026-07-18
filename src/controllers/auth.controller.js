@@ -89,11 +89,31 @@ async function login(req, res) {
     return res.status(400).json({ error: 'email and password must be strings' });
   }
 
-  const user = await User.findOne({ email: email.toLowerCase().trim() });
-  if (!user) return res.status(401).json({ error: 'Invalid email or password' });
+  // "Invalid email or password" is deliberately generic to the user (never confirm whether an
+  // email is registered), but that leaves support blind — every failed-login report otherwise
+  // means manually digging through the DB to find out which of these two cases it was. The email
+  // itself isn't sensitive, so it's safe to log; the password never is and never gets logged.
+  const normalizedEmail = email.toLowerCase().trim();
+  const user = await User.findOne({ email: normalizedEmail });
+  if (!user) {
+    console.log(`[auth] login failed — no account for ${normalizedEmail}`);
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
 
   const valid = await user.comparePassword(password);
-  if (!valid) return res.status(401).json({ error: 'Invalid email or password' });
+  if (!valid) {
+    // A Google-first account (see loginWithGoogle below) gets a random password the user never
+    // sees and never set themselves, plus no phone on file — so typing a guessed password here
+    // fails exactly like a wrong password, and "Forgot password" can't rescue them either (it
+    // requires a phone match). That reads as a broken account; it's actually just the wrong login
+    // method, so say so instead of the generic message.
+    if (user.googleId) {
+      console.log(`[auth] login failed — ${normalizedEmail} has a Google-linked account, no password to check against`);
+      return res.status(401).json({ error: 'This account signs in with Google — use the "Continue with Google" button instead.' });
+    }
+    console.log(`[auth] login failed — wrong password for ${normalizedEmail} (status: ${user.status})`);
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
 
   if (user.status === 'pending') {
     return res.status(403).json({ error: 'Your account is awaiting super admin approval' });
