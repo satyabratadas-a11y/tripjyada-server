@@ -27,6 +27,14 @@ app.use(
 app.use(express.json());
 app.use(cookieParser());
 
+// Every response here is per-user and session-dependent, so nothing under /api should ever be
+// cached — a CDN, corporate proxy, or the browser itself caching a stale response (an old 404
+// from mid-deploy, or worse, one user's task data) is a correctness bug, not a performance win.
+app.use((req, res, next) => {
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+
 app.get('/api/health', (req, res) => res.json({ ok: true }));
 
 app.use('/api/auth', authRoutes);
