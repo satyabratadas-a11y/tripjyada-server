@@ -61,7 +61,8 @@ async function getToday(req, res) {
 
   let employees;
   if (isAdminLike(req.user) && !ownOnly) {
-    employees = await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 });
+    const visibleRoles = isSuperAdmin(req.user) ? ['employee', 'admin', 'super_admin'] : ['employee'];
+    employees = await User.find({ role: { $in: visibleRoles }, status: 'active' }).sort({ name: 1 });
   } else {
     employees = [req.user];
   }
@@ -92,7 +93,7 @@ async function getToday(req, res) {
   }
 
   const rows = employees.map((emp) => ({
-    employee: { id: emp._id, name: emp.name, jobTitle: emp.jobTitle },
+    employee: { id: emp._id, name: emp.name, jobTitle: emp.jobTitle, role: emp.role },
     tasks: tasksByEmployee.get(String(emp._id)) || [],
   }));
 

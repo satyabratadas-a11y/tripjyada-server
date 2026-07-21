@@ -1,27 +1,33 @@
 const User = require('../models/User');
 const Task = require('../models/Task');
 const { startOfMonth, endOfMonthExclusive, rollupTasks } = require('../utils/scoring');
-const { isAdminLike } = require('../utils/roles');
+const { isAdminLike, isSuperAdmin } = require('../utils/roles');
 
 async function getDashboard(req, res) {
   const month = parseInt(req.query.month, 10);
   const year = parseInt(req.query.year, 10);
   if (!month || !year) return res.status(400).json({ error: 'month and year query params are required' });
 
-  const employees =
-    isAdminLike(req.user)
-      ? await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 })
-      : [req.user];
+  let members;
+  if (isSuperAdmin(req.user)) {
+    // Super admins review work from every task-owning role, including other admins and their
+    // own self-added tasks. B2B agents do not participate in the task tracker.
+    members = await User.find({ role: { $in: ['employee', 'admin', 'super_admin'] }, status: 'active' }).sort({ name: 1 });
+  } else if (isAdminLike(req.user)) {
+    members = await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 });
+  } else {
+    members = [req.user];
+  }
 
   const rangeStart = startOfMonth(year, month);
   const rangeEnd = endOfMonthExclusive(year, month);
 
   const rows = await Promise.all(
-    employees.map(async (emp) => {
-      const tasks = await Task.find({ employee: emp._id, date: { $gte: rangeStart, $lt: rangeEnd } });
+    members.map(async (member) => {
+      const tasks = await Task.find({ employee: member._id, date: { $gte: rangeStart, $lt: rangeEnd } });
       const rollup = rollupTasks(tasks);
       return {
-        employee: { id: emp._id, name: emp.name, jobTitle: emp.jobTitle },
+        employee: { id: member._id, name: member.name, jobTitle: member.jobTitle, role: member.role },
         ...rollup,
       };
     })
