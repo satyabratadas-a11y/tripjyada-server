@@ -9,6 +9,7 @@ const router = express.Router();
 router.use(requireAuth);
 
 router.get('/today', asyncHandler(ctrl.getToday));
+router.get('/today/mine', asyncHandler(ctrl.getOwnToday));
 router.get('/', asyncHandler(ctrl.listTasks));
 router.post('/', requireRole('admin'), asyncHandler(ctrl.createOrAssignTask));
 router.post('/self', requireRole('employee', 'admin'), asyncHandler(ctrl.employeeCreateTask));

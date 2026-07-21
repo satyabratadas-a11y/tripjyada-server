@@ -39,8 +39,15 @@ function validateEnumValue(res, field, value, allowed) {
 /**
  * Admin sees every active employee's tasks for the given day (defaults to today, and can be
  * overridden with ?date=YYYY-MM-DD to browse any day); an employee always sees only their own.
- * ?scope=own forces the caller's own tasks instead — used by an admin's personal "My Today" page,
- * since an admin-like caller would otherwise get the cross-employee oversight grid.
+ * GET /today/mine forces the caller's own tasks instead — used by an admin's personal "My Today"
+ * page, since an admin-like caller would otherwise get the cross-employee oversight grid.
+ *
+ * "Own tasks" used to be selected with ?scope=own on this same route, but a query string is easy
+ * to lose in transit — a privacy extension, corporate proxy, or misconfigured cache can strip or
+ * ignore it — which silently dropped an admin back into the cross-employee view and made their
+ * own row vanish (that view only queries role:'employee'). A dedicated path can't be stripped
+ * the same way and can't collide in a cache that ignores query strings, so it's the reliable way
+ * to select this for a caller doing something as important as logging their own work.
  *
  * The live "today" view (no ?date= override) also carries forward any task still On Progress
  * from an earlier day — whether it was left that way originally or was reopened by editing an
@@ -48,15 +55,14 @@ function validateEnumValue(res, field, value, allowed) {
  * stranded on a date nobody revisits. Browsing a specific past day via ?date= is a historical
  * lookup, not the live worklist, so it only shows that day's own tasks.
  *
- * On top of that, an owner's own live view (?scope=own — an employee's personal list, or an
+ * On top of that, an owner's own live view (/today/mine — an employee's personal list, or an
  * admin's own "My Today") drops a task the moment it's resolved (Done or Not Done): once there's
  * nothing left to act on, it belongs in the monthly log, not the actionable worklist. The
  * cross-employee oversight grid (admin/super admin browsing everyone) keeps showing today's
  * done work too, since that's exactly what a reviewer needs to verify same-day.
  */
-async function getToday(req, res) {
+async function getTodayRows(req, res, ownOnly) {
   const { start, end } = dayRangeUTC(req.query.date);
-  const ownOnly = req.query.scope === 'own';
   const isLiveToday = !req.query.date;
 
   let employees;
@@ -98,6 +104,14 @@ async function getToday(req, res) {
   }));
 
   return res.json({ date: start, rows });
+}
+
+async function getToday(req, res) {
+  return getTodayRows(req, res, false);
+}
+
+async function getOwnToday(req, res) {
+  return getTodayRows(req, res, true);
 }
 
 /**
@@ -336,6 +350,7 @@ async function deleteTask(req, res) {
 
 module.exports = {
   getToday,
+  getOwnToday,
   listTasks,
   createOrAssignTask,
   employeeCreateTask,
