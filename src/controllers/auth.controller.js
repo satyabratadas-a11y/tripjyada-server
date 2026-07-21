@@ -2,6 +2,7 @@ const User = require('../models/User');
 const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const { signToken, setAuthCookie, clearAuthCookie } = require('../utils/token');
+const { isUploadEnabled, uploadBuffer } = require('../utils/cloudinary');
 
 let googleClient;
 
@@ -200,6 +201,64 @@ async function me(req, res) {
   return res.json({ user: req.user.toSafeJSON() });
 }
 
+async function updateMe(req, res) {
+  const { name, email, employeeCode } = req.body;
+  const user = req.user;
+
+  if (name !== undefined) {
+    const trimmedName = String(name).trim();
+    if (!trimmedName) return res.status(400).json({ error: 'Name is required' });
+    user.name = trimmedName;
+  }
+
+  if (email !== undefined) {
+    const normalizedEmail = String(email).toLowerCase().trim();
+    if (!normalizedEmail) return res.status(400).json({ error: 'Email is required' });
+    if (normalizedEmail !== user.email) {
+      const existing = await User.findOne({ email: normalizedEmail, _id: { $ne: user._id } });
+      if (existing) return res.status(409).json({ error: 'An account with this email already exists' });
+      user.email = normalizedEmail;
+    }
+  }
+
+  if (employeeCode !== undefined) {
+    const trimmedCode = String(employeeCode).trim();
+    if (!trimmedCode) return res.status(400).json({ error: 'Employee ID is required' });
+    if (trimmedCode !== user.employeeCode) {
+      const existing = await User.findOne({ employeeCode: trimmedCode, _id: { $ne: user._id } });
+      if (existing) return res.status(409).json({ error: 'An account with this employee ID already exists' });
+      user.employeeCode = trimmedCode;
+    }
+  }
+
+  await user.save();
+  return res.json({ user: user.toSafeJSON() });
+}
+
+async function updateAvatar(req, res) {
+  if (!isUploadEnabled()) {
+    return res.status(503).json({ error: 'Profile picture uploads are not configured. Add CLOUDINARY_* keys to server/.env to enable them.' });
+  }
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  if (!req.file.mimetype.startsWith('image/')) {
+    return res.status(400).json({ error: 'Only image files are allowed' });
+  }
+
+  const result = await uploadBuffer(req.file.buffer, {
+    folder: `profile-avatars/${req.user._id}`,
+    resourceType: 'image',
+  });
+  req.user.avatarUrl = result.secure_url;
+  await req.user.save();
+  return res.json({ user: req.user.toSafeJSON() });
+}
+
+async function removeAvatar(req, res) {
+  req.user.avatarUrl = '';
+  await req.user.save();
+  return res.json({ user: req.user.toSafeJSON() });
+}
+
 async function changePassword(req, res) {
   const { currentPassword, newPassword } = req.body;
   if (!currentPassword || !newPassword) {
@@ -239,4 +298,15 @@ async function forgotPassword(req, res) {
   return res.json({ message: 'Password updated. You can now log in with your new password.' });
 }
 
-module.exports = { signup, login, loginWithGoogle, logout, me, changePassword, forgotPassword };
+module.exports = {
+  signup,
+  login,
+  loginWithGoogle,
+  logout,
+  me,
+  updateMe,
+  updateAvatar,
+  removeAvatar,
+  changePassword,
+  forgotPassword,
+};
