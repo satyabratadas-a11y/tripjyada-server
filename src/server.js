@@ -8,6 +8,14 @@ const { isSheetsEnabled, missingSheetsEnvVars } = require('./utils/googleSheets'
 
 const PORT = process.env.PORT || 4000;
 
+// Hostinger's Node.js hosting kills and restarts the process if it doesn't call listen() within
+// a few seconds of boot. This chain used to run before listen() — connecting to Atlas, syncing
+// indexes, and backfilling legacy tasks — and on Hostinger's network that occasionally crossed
+// the healthcheck window, so the deploy got marked failed even though the app was fine a moment
+// later. Mongoose queues queries until the connection is ready (bufferCommands, on by default),
+// so it's safe to start accepting HTTP traffic immediately and finish connecting in the background.
+app.listen(PORT, () => console.log(`[server] listening on http://localhost:${PORT}`));
+
 connectDB()
   .then(() => Promise.all([Task.syncIndexes(), AuditLog.syncIndexes()]))
   .then(() => backfillLegacyTasks())
@@ -20,7 +28,6 @@ connectDB()
     } else {
       console.log(`[sheets] Google Sheets contact sync is disabled — missing env var(s): ${missingSheetsEnvVars().join(', ')}`);
     }
-    app.listen(PORT, () => console.log(`[server] listening on http://localhost:${PORT}`));
   })
   .catch((err) => {
     console.error('[server] failed to start:', err);
