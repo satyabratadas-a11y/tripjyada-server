@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
+const compression = require('compression');
 
 const authRoutes = require('./routes/auth.routes');
 const adminRoutes = require('./routes/admin.routes');
@@ -24,6 +25,9 @@ app.use(
     credentials: true,
   })
 );
+// Gzips every JSON response — dashboard/report payloads especially are large, repetitive JSON
+// that compresses 70-80%, cutting transfer size and load time on slow/limited connections.
+app.use(compression());
 app.use(express.json());
 app.use(cookieParser());
 

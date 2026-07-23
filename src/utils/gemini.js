@@ -42,6 +42,21 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+// Serializes every Gemini call across all agents scanning at once. Under a tight per-minute quota
+// (e.g. a billing account still under Google's identity-verification hold), several agents
+// scanning in the same moment fire concurrently and trip the limit together even though the same
+// requests spread out a second or two apart would each have fit. This doesn't add any delay when
+// only one scan is in flight — it only queues up behind a request that's already running.
+let geminiQueue = Promise.resolve();
+function runQueued(task) {
+  const result = geminiQueue.then(task, task);
+  geminiQueue = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
 /**
  * Reads one or two photographs of a business card (front, and optionally back) and returns
  * structured contact fields. `images` is an array of { buffer, mimeType } — a second entry is
@@ -91,7 +106,10 @@ async function extractCardFields(images) {
   };
 
   const MAX_ATTEMPTS = 4;
-  const BACKOFF_MS = [500, 1500, 3000];
+  // Longer than before (was 500/1500/3000) — under a per-minute quota, a longer wait has a real
+  // chance of landing in the next window; a few extra seconds of "Reading card with AI…" is a much
+  // better trade than failing outright and asking the agent to type the card in by hand.
+  const BACKOFF_MS = [1000, 3000, 6000];
   let lastError;
 
   const totalBytes = images.reduce((sum, img) => sum + img.buffer.length, 0);
@@ -100,7 +118,7 @@ async function extractCardFields(images) {
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const attemptStartedAt = Date.now();
     try {
-      const response = await ai.models.generateContent(request);
+      const response = await runQueued(() => ai.models.generateContent(request));
       const text = response.text;
       console.log(
         `[gemini] scan ok — ${images.length} image(s), ${(totalBytes / 1024).toFixed(0)}KB, attempt ${attempt + 1}, ` +

@@ -9,6 +9,9 @@ function configureCloudinary() {
     cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
     api_key: process.env.CLOUDINARY_API_KEY,
     api_secret: process.env.CLOUDINARY_API_SECRET,
+    // This Cloudinary account's Security settings require SHA-256 signatures; the SDK defaults
+    // to SHA-1, which the account rejects as "Invalid Signature" even with a correct secret.
+    signature_algorithm: 'sha256',
   });
   return cloudinary;
 }
