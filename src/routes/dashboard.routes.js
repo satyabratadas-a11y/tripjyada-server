@@ -6,5 +6,6 @@ const asyncHandler = require('../utils/asyncHandler');
 const router = express.Router();
 
 router.get('/', requireAuth, asyncHandler(ctrl.getDashboard));
+router.get('/trend', requireAuth, asyncHandler(ctrl.getTrend));
 
 module.exports = router;

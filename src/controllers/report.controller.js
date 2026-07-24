@@ -50,20 +50,29 @@ async function buildMonthlyReport(year, month) {
   const rangeStart = startOfMonth(year, month);
   const rangeEnd = endOfMonthExclusive(year, month);
 
-  const rows = await Promise.all(
-    employees.map(async (emp) => {
-      const tasks = await Task.find({ employee: emp._id, date: { $gte: rangeStart, $lt: rangeEnd } }).sort({
-        date: 1,
-      });
-      const rollup = rollupTasks(tasks);
-      return {
-        employee: emp,
-        tasks,
-        ...rollup,
-        integrity: rollup.flags > 0 ? `${rollup.flags} flag(s)` : 'All clear',
-      };
-    })
-  );
+  // One query for the whole team instead of one per employee — same result, fewer round trips as
+  // the team grows.
+  const employeeIds = employees.map((e) => e._id);
+  const allTasks = await Task.find({ employee: { $in: employeeIds }, date: { $gte: rangeStart, $lt: rangeEnd } }).sort({
+    date: 1,
+  });
+  const tasksByEmployee = new Map();
+  for (const task of allTasks) {
+    const key = String(task.employee);
+    if (!tasksByEmployee.has(key)) tasksByEmployee.set(key, []);
+    tasksByEmployee.get(key).push(task);
+  }
+
+  const rows = employees.map((emp) => {
+    const tasks = tasksByEmployee.get(String(emp._id)) || [];
+    const rollup = rollupTasks(tasks);
+    return {
+      employee: emp,
+      tasks,
+      ...rollup,
+      integrity: rollup.flags > 0 ? `${rollup.flags} flag(s)` : 'All clear',
+    };
+  });
 
   const team = rows.reduce(
     (acc, r) => {
