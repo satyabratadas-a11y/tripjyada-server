@@ -3,6 +3,8 @@ const crypto = require('crypto');
 const { OAuth2Client } = require('google-auth-library');
 const { signToken, setAuthCookie, clearAuthCookie } = require('../utils/token');
 const { isUploadEnabled, uploadBuffer } = require('../utils/cloudinary');
+const { createResetToken, hashResetToken, isRateLimited } = require('../utils/passwordReset');
+const { sendPasswordResetEmail } = require('../utils/email');
 
 let googleClient;
 
@@ -276,24 +278,66 @@ async function changePassword(req, res) {
   return res.json({ message: 'Password updated' });
 }
 
+// Previously accepted { email, phone, newPassword } and reset the password immediately on a
+// match — but a coworker's phone number is usually known or easily discoverable within a small
+// team, which made this a full account-takeover path (including onto admin/super admin accounts)
+// with zero proof of owning the account's inbox. Now it only emails a one-time reset link, so
+// the reset requires access to the actual email account, not just two low-entropy facts about it.
 async function forgotPassword(req, res) {
-  const { email, phone, newPassword } = req.body;
-  if (!email || !phone || !newPassword) {
-    return res.status(400).json({ error: 'email, phone and newPassword are required' });
+  const { email } = req.body;
+  if (!email || typeof email !== 'string') {
+    return res.status(400).json({ error: 'email is required' });
   }
-  if ([email, phone, newPassword].some((v) => typeof v !== 'string')) {
-    return res.status(400).json({ error: 'email, phone and newPassword must be strings' });
+
+  const normalizedEmail = email.toLowerCase().trim();
+  // Same generic response whether or not the account exists, and rate-limited per email —
+  // otherwise the response (or its timing) would let an attacker enumerate registered emails,
+  // and an unthrottled endpoint would let them spam a target's inbox with reset emails.
+  const genericResponse = {
+    message: 'If an account exists for that email, a password reset link has been sent to it.',
+  };
+
+  if (isRateLimited(`forgot:${normalizedEmail}`)) {
+    return res.json(genericResponse);
+  }
+
+  const user = await User.findOne({ email: normalizedEmail });
+  if (user) {
+    const { token, tokenHash, expiresAt } = createResetToken();
+    user.resetPasswordTokenHash = tokenHash;
+    user.resetPasswordExpiresAt = expiresAt;
+    await user.save();
+    await sendPasswordResetEmail(user, token).catch((err) => {
+      console.error('[email] failed to send password reset email:', err);
+    });
+  }
+
+  return res.json(genericResponse);
+}
+
+async function resetPassword(req, res) {
+  const { token, newPassword } = req.body;
+  if (!token || !newPassword) {
+    return res.status(400).json({ error: 'token and newPassword are required' });
+  }
+  if (typeof token !== 'string' || typeof newPassword !== 'string') {
+    return res.status(400).json({ error: 'token and newPassword must be strings' });
   }
   if (newPassword.length < 8) {
     return res.status(400).json({ error: 'New password must be at least 8 characters' });
   }
 
-  const user = await User.findOne({ email: email.toLowerCase().trim() });
-  if (!user || !user.phone || user.phone !== phone.trim()) {
-    return res.status(401).json({ error: 'No account matches that email and phone number' });
+  const user = await User.findOne({
+    resetPasswordTokenHash: hashResetToken(token),
+    resetPasswordExpiresAt: { $gt: new Date() },
+  });
+  if (!user) {
+    return res.status(400).json({ error: 'This reset link is invalid or has expired. Request a new one.' });
   }
 
   await user.setPassword(newPassword);
+  user.resetPasswordTokenHash = null;
+  user.resetPasswordExpiresAt = null;
   await user.save();
   return res.json({ message: 'Password updated. You can now log in with your new password.' });
 }
@@ -309,4 +353,5 @@ module.exports = {
   removeAvatar,
   changePassword,
   forgotPassword,
+  resetPassword,
 };

@@ -109,9 +109,27 @@ async function sendTaskReviewEmail(user, task) {
   });
 }
 
+async function sendPasswordResetEmail(user, token) {
+  return sendEmail({
+    to: user.email,
+    subject: 'Reset your Task Tracker password',
+    text: [
+      `Hi ${user.name},`,
+      '',
+      'Someone requested a password reset for your account. If this was you, click the link below',
+      '(valid for 1 hour) to choose a new password:',
+      '',
+      `${getClientOrigin()}/reset-password?token=${token}`,
+      '',
+      "If you didn't request this, you can safely ignore this email — your password won't change.",
+    ].join('\n'),
+  });
+}
+
 module.exports = {
   hasEmailConfig,
   sendApprovalEmail,
   sendTaskAssignedEmail,
   sendTaskReviewEmail,
+  sendPasswordResetEmail,
 };

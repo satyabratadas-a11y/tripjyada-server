@@ -18,6 +18,11 @@ const userSchema = new mongoose.Schema(
     // real state rather than stored — "mark all read" can't flip a `read` flag on them, so instead
     // it records this timestamp and anything generated at or before it counts as read.
     notificationsClearedAt: { type: Date, default: null },
+    // A password-reset link's token is emailed in the clear, so only its SHA-256 hash is ever
+    // stored — matching the pattern used for the auth JWT, where the raw secret never touches
+    // the database either.
+    resetPasswordTokenHash: { type: String, default: null },
+    resetPasswordExpiresAt: { type: Date, default: null },
   },
   { timestamps: true }
 );
