@@ -10,9 +10,10 @@ async function getDashboard(req, res) {
 
   let members;
   if (isSuperAdmin(req.user)) {
-    // Super admins review work from every task-owning role, including other admins and their
-    // own self-added tasks. B2B agents do not participate in the task tracker.
-    members = await User.find({ role: { $in: ['employee', 'admin', 'super_admin'] }, status: 'active' }).sort({ name: 1 });
+    // Super admins review work from employees and admins, but not other super admins — that
+    // tier isn't part of the reviewed hierarchy here. B2B agents do not participate in the task
+    // tracker either.
+    members = await User.find({ role: { $in: ['employee', 'admin'] }, status: 'active' }).sort({ name: 1 });
   } else if (isAdminLike(req.user)) {
     members = await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 });
   } else {
