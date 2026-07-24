@@ -56,10 +56,12 @@ function validateEnumValue(res, field, value, allowed) {
  * lookup, not the live worklist, so it only shows that day's own tasks.
  *
  * On top of that, an owner's own live view (/today/mine — an employee's personal list, or an
- * admin's own "My Today") drops a task the moment it's resolved (Done or Not Done): once there's
- * nothing left to act on, it belongs in the monthly log, not the actionable worklist. The
- * cross-employee oversight grid (admin/super admin browsing everyone) keeps showing today's
- * done work too, since that's exactly what a reviewer needs to verify same-day.
+ * admin's own "My Today") keeps showing a task after it's resolved (Done or Not Done) until a
+ * reviewer has actually looked at it (adminStatus moves off 'pending') — otherwise a task an
+ * employee just marked done would vanish into the monthly log before anyone verified it. Once
+ * reviewed, it drops off the live worklist. The cross-employee oversight grid (admin/super admin
+ * browsing everyone) keeps showing today's done work too, since that's exactly what a reviewer
+ * needs to verify same-day.
  */
 async function getTodayRows(req, res, ownOnly) {
   const { start, end } = dayRangeUTC(req.query.date);
@@ -82,8 +84,11 @@ async function getTodayRows(req, res, ownOnly) {
   } else if (ownOnly) {
     filter = {
       ...employeeFilter,
-      memberStatus: { $nin: ['done', 'not_done'] },
-      $or: [dateFilter, { memberStatus: 'on_progress' }],
+      $or: [
+        dateFilter,
+        { memberStatus: 'on_progress' },
+        { memberStatus: { $in: ['done', 'not_done'] }, adminStatus: 'pending' },
+      ],
     };
   } else {
     filter = { ...employeeFilter, $or: [dateFilter, { memberStatus: 'on_progress' }] };
