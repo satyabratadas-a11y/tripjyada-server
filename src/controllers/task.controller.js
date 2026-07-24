@@ -132,6 +132,7 @@ async function listTasks(req, res) {
   // (as an admin's own "My Monthly Log" page does) falls back to their own tasks, same as an
   // employee always gets.
   let employeeId;
+  let employeeInfo;
   if (isAdminLike(req.user) && req.query.employeeId) {
     employeeId = req.query.employeeId;
     if (!mongoose.isValidObjectId(employeeId)) {
@@ -140,6 +141,9 @@ async function listTasks(req, res) {
     const target = await User.findById(employeeId);
     if (ownerOutranksAdmin(target?.role) && !isSuperAdmin(req.user)) {
       return res.status(403).json({ error: 'Only a super admin can view an admin\'s tasks' });
+    }
+    if (target) {
+      employeeInfo = { id: target._id, name: target.name, jobTitle: target.jobTitle, role: target.role };
     }
   } else {
     employeeId = String(req.user._id);
@@ -156,7 +160,67 @@ async function listTasks(req, res) {
 
   const tasks = await Task.find(filter).sort({ date: 1, createdAt: 1 });
 
-  return res.json({ tasks });
+  return res.json({ tasks, employee: employeeInfo });
+}
+
+/**
+ * Admin-only: searches across every visible employee's tasks by keyword/date/status, instead of
+ * being scoped to one employee's monthly log — for "which task was that, again?" lookups.
+ * Visibility mirrors the dashboard: a plain admin sees employees only, a super admin also sees
+ * other admins, but never other super admins (that tier isn't part of the reviewed hierarchy).
+ */
+async function searchTasks(req, res) {
+  const q = String(req.query.q || '').trim();
+  const { from, to, employeeId } = req.query;
+  const statusFilter = req.query.adminStatus;
+  if (!validateEnumValue(res, 'adminStatus', statusFilter, ADMIN_STATUSES)) return;
+
+  const rawLimit = parseInt(req.query.limit, 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+
+  const visibleRoles = isSuperAdmin(req.user) ? ['employee', 'admin'] : ['employee'];
+  const employees = await User.find({ role: { $in: visibleRoles } }).select('name jobTitle role');
+  const employeeMap = new Map(employees.map((e) => [String(e._id), e]));
+
+  const filter = {};
+  if (employeeId) {
+    if (!mongoose.isValidObjectId(employeeId) || !employeeMap.has(employeeId)) {
+      return res.status(400).json({ error: 'employeeId must be a valid, visible employee id' });
+    }
+    filter.employee = employeeId;
+  } else {
+    filter.employee = { $in: [...employeeMap.keys()] };
+  }
+
+  if (from) {
+    const fromDate = new Date(from);
+    if (Number.isNaN(fromDate.getTime())) return res.status(400).json({ error: 'from must be a valid date' });
+    filter.date = { ...filter.date, $gte: fromDate };
+  }
+  if (to) {
+    const toDate = new Date(to);
+    if (Number.isNaN(toDate.getTime())) return res.status(400).json({ error: 'to must be a valid date' });
+    toDate.setUTCHours(23, 59, 59, 999);
+    filter.date = { ...filter.date, $lte: toDate };
+  }
+
+  if (statusFilter) filter.adminStatus = statusFilter;
+
+  if (q) {
+    // User-supplied text going straight into $regex — escape it so a search for "a.b" or "(x"
+    // matches those literal characters instead of being parsed as regex syntax.
+    const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const pattern = new RegExp(escaped, 'i');
+    filter.$or = [{ assignedTask: pattern }, { brief: pattern }];
+  }
+
+  const tasks = await Task.find(filter).sort({ date: -1 }).limit(limit).lean();
+  const results = tasks.map((t) => {
+    const emp = employeeMap.get(String(t.employee));
+    return { ...t, employee: emp ? { id: String(t.employee), name: emp.name, jobTitle: emp.jobTitle, role: emp.role } : { id: String(t.employee) } };
+  });
+
+  return res.json({ tasks: results });
 }
 
 /** Admin-only: assigns a new task to a given employee + date. Multiple tasks per day are allowed. */
@@ -253,6 +317,13 @@ async function adminUpdateTask(req, res) {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
+  // Reviewing your own task defeats the point of review, regardless of rank — a super admin
+  // self-logging a task and then approving it themselves is the most important case this blocks,
+  // since the "outranks" check below never catches a super admin reviewing a super admin.
+  if (String(task.employee) === String(req.user._id)) {
+    return res.status(403).json({ error: 'You cannot review your own task' });
+  }
+
   const employee = await User.findById(task.employee);
   if (ownerOutranksAdmin(employee?.role) && !isSuperAdmin(req.user)) {
     return res.status(403).json({ error: 'Only a super admin can review an admin\'s task' });
@@ -295,6 +366,76 @@ async function adminUpdateTask(req, res) {
   return res.json({ task });
 }
 
+/**
+ * Reviews many tasks in one call — same permission rules as adminUpdateTask (self-review and
+ * outrank checks) applied per task, so a batch that includes one task the caller isn't allowed
+ * to review just skips that one instead of failing the whole batch.
+ */
+async function bulkAdminUpdate(req, res) {
+  const { taskIds, adminStatus, reviewerNotes } = req.body;
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    return res.status(400).json({ error: 'taskIds must be a non-empty array' });
+  }
+  if (!validateEnumValue(res, 'adminStatus', adminStatus, ADMIN_STATUSES)) return;
+
+  const validIds = taskIds.filter((id) => mongoose.isValidObjectId(id));
+  const tasks = await Task.find({ _id: { $in: validIds } });
+
+  const employeeCache = new Map();
+  const updated = [];
+  const skipped = [];
+
+  for (const task of tasks) {
+    if (String(task.employee) === String(req.user._id)) {
+      skipped.push({ id: String(task._id), reason: 'You cannot review your own task' });
+      continue;
+    }
+
+    const employeeKey = String(task.employee);
+    if (!employeeCache.has(employeeKey)) {
+      employeeCache.set(employeeKey, await User.findById(task.employee));
+    }
+    const employee = employeeCache.get(employeeKey);
+
+    if (ownerOutranksAdmin(employee?.role) && !isSuperAdmin(req.user)) {
+      skipped.push({ id: String(task._id), reason: "Only a super admin can review an admin's task" });
+      continue;
+    }
+
+    const before = { adminStatus: task.adminStatus, reviewerNotes: task.reviewerNotes };
+    task.adminStatus = adminStatus;
+    if (reviewerNotes !== undefined) task.reviewerNotes = reviewerNotes;
+    await task.save();
+
+    await recordAudit({
+      actor: req.user,
+      action: 'task.reviewed',
+      targetType: 'task',
+      targetId: task._id,
+      targetLabel: employee?.name || String(task.employee),
+      summary: `Bulk-updated ${employee?.name || 'employee'}'s task for ${dateKey(task.date)}`,
+      changes: diffFields(before, task, ['adminStatus', 'reviewerNotes']),
+      metadata: {
+        employeeId: String(task.employee),
+        employeeName: employee?.name || '',
+        date: dateKey(task.date),
+        task: task.assignedTask,
+        bulk: true,
+      },
+    });
+
+    if (employee?.status === 'active') {
+      sendTaskReviewEmail(employee, task).catch((err) => {
+        console.error('[email] failed to send review email:', err);
+      });
+    }
+
+    updated.push(task);
+  }
+
+  return res.json({ updated, skipped });
+}
+
 async function employeeUpdateTask(req, res) {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -318,7 +459,7 @@ async function deleteTask(req, res) {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
 
-  const employee = isAdminLike(req.user) ? await User.findById(task.employee) : null;
+  const employee = isAdminLike(req.user) ? await User.findById(task.employee) : req.user;
   if (!isAdminLike(req.user)) {
     if (String(task.employee) !== String(req.user._id)) {
       return res.status(403).json({ error: 'You can only delete your own task' });
@@ -326,29 +467,35 @@ async function deleteTask(req, res) {
     if (task.createdBy !== 'employee') {
       return res.status(403).json({ error: 'You cannot delete a task assigned by an admin' });
     }
+    // Once a reviewer has looked at it, deleting it would silently erase reviewed history (and
+    // shrink monthly completed/flagged counts) with no trace — past that point only an admin can
+    // remove it, which is always audited below.
+    if (task.adminStatus !== 'pending') {
+      return res.status(403).json({ error: 'This task has already been reviewed — ask an admin to remove it' });
+    }
   } else if (ownerOutranksAdmin(employee?.role) && !isSuperAdmin(req.user) && String(task.employee) !== String(req.user._id)) {
     return res.status(403).json({ error: 'Only a super admin can delete another admin\'s task' });
   }
 
   await task.deleteOne();
 
-  if (isAdminLike(req.user)) {
-    await recordAudit({
-      actor: req.user,
-      action: 'task.deleted',
-      targetType: 'task',
-      targetId: task._id,
-      targetLabel: employee?.name || String(task.employee),
-      summary: `Deleted ${employee?.name || 'employee'}'s task from ${dateKey(task.date)}`,
-      metadata: {
-        employeeId: String(task.employee),
-        employeeName: employee?.name || '',
-        date: dateKey(task.date),
-        task: task.assignedTask,
-        createdBy: task.createdBy,
-      },
-    });
-  }
+  // Always audited, not just admin-initiated deletes — an employee erasing their own task is
+  // still a real change to their work history and should leave a trace.
+  await recordAudit({
+    actor: req.user,
+    action: 'task.deleted',
+    targetType: 'task',
+    targetId: task._id,
+    targetLabel: employee?.name || String(task.employee),
+    summary: `Deleted ${employee?.name || 'employee'}'s task from ${dateKey(task.date)}`,
+    metadata: {
+      employeeId: String(task.employee),
+      employeeName: employee?.name || '',
+      date: dateKey(task.date),
+      task: task.assignedTask,
+      createdBy: task.createdBy,
+    },
+  });
 
   return res.status(204).send();
 }
@@ -357,9 +504,11 @@ module.exports = {
   getToday,
   getOwnToday,
   listTasks,
+  searchTasks,
   createOrAssignTask,
   employeeCreateTask,
   adminUpdateTask,
+  bulkAdminUpdate,
   employeeUpdateTask,
   deleteTask,
 };
