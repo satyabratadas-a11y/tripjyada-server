@@ -270,19 +270,15 @@ async function createOrAssignTask(req, res) {
 }
 
 /**
- * Employee-only: adds a task for themselves, always for today. Self-adding for a past or future
- * date would let a forgotten day get backfilled after the fact instead of being an honest,
- * same-day record — an admin assigning a task for another date is a separate route and unaffected.
+ * Employee-only: adds a task for themselves, for today or any other date they pick (e.g.
+ * backfilling a day they forgot to log) — an admin assigning a task for another date is a
+ * separate route and unaffected.
  */
 async function employeeCreateTask(req, res) {
   const { date, assignedTask, brief, proofLink, memberStatus } = req.body;
   const trimmedAssignedTask = assignedTask?.trim();
   if (!date || !trimmedAssignedTask) {
     return res.status(400).json({ error: 'date and assignedTask are required' });
-  }
-  const todayKey = new Date().toISOString().slice(0, 10);
-  if (String(date).slice(0, 10) !== todayKey) {
-    return res.status(400).json({ error: 'You can only add a task for today' });
   }
   if (!validateEnumValue(res, 'memberStatus', memberStatus, MEMBER_STATUSES)) return;
 
