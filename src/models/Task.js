@@ -6,6 +6,9 @@ const taskSchema = new mongoose.Schema(
     date: { type: Date, required: true },
     dayType: { type: String, enum: ['working', 'optional_sunday'], required: true },
     createdBy: { type: String, enum: ['admin', 'employee'], required: true },
+    // Optional link to a deadline-bound Project this task is a day's progress entry for. Set
+    // once at creation time (see task.controller.js); null for an ordinary standalone task.
+    project: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
 
     // Admin-owned fields — only an admin route may write these
     assignedTask: { type: String, trim: true, default: '' },
@@ -31,5 +34,7 @@ const taskSchema = new mongoose.Schema(
 // Multiple tasks per employee per day are allowed (admin-assigned and/or self-added), so this
 // index is for query performance only, not uniqueness.
 taskSchema.index({ employee: 1, date: 1 });
+// Supports a project's detail view listing all of its linked daily entries.
+taskSchema.index({ project: 1, date: 1 });
 
 module.exports = mongoose.model('Task', taskSchema);

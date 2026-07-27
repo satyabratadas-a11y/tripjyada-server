@@ -2,8 +2,10 @@ const mongoose = require('mongoose');
 const Notification = require('../models/Notification');
 const ContentEntry = require('../models/ContentEntry');
 const Task = require('../models/Task');
+const Project = require('../models/Project');
 const User = require('../models/User');
 const { isAdminLike, isSuperAdmin } = require('../utils/roles');
+const { startOfTodayUTC } = require('../utils/projectStatus');
 
 function serialize(n) {
   return {
@@ -161,6 +163,84 @@ async function buildTaskAlerts(user) {
   return buildEmployeeTaskAlerts(user);
 }
 
+function formatProjectLabel(title) {
+  const value = String(title || '').trim();
+  if (!value) return 'A project';
+  return value.length > 56 ? `${value.slice(0, 53)}...` : value;
+}
+
+function formatProjectDate(date) {
+  return new Date(date).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
+
+// Overdue is computed live from the same (status, endDate) shape isProjectOverdue uses, rather
+// than importing it directly, so this stays a plain query the Project index can serve.
+async function findOverdueProjects(extraFilter = {}) {
+  return Project.find({
+    ...extraFilter,
+    status: { $ne: 'completed' },
+    endDate: { $lt: startOfTodayUTC() },
+  })
+    .populate('employee', 'name')
+    .sort({ endDate: -1 })
+    .limit(40);
+}
+
+async function buildAdminProjectAlerts(user) {
+  const visibleRoles = isSuperAdmin(user) ? ['employee', 'admin'] : ['employee'];
+  const visibleEmployees = await User.find({ role: { $in: visibleRoles } }).select('_id');
+  const projects = await findOverdueProjects({ employee: { $in: visibleEmployees.map((e) => e._id) } });
+
+  return projects
+    .filter((project) => project.employee)
+    .map((project) => {
+      const title = formatProjectLabel(project.title);
+      const employeeName = project.employee.name || 'An employee';
+      const dueDate = formatProjectDate(project.endDate);
+      const createdAt = project.updatedAt || project.endDate;
+
+      return {
+        id: `project-overdue-${project._id}`,
+        type: 'project_overdue',
+        message: `${employeeName}'s project "${title}" is overdue (was due ${dueDate}).`,
+        link: '/admin/projects',
+        client: null,
+        entry: null,
+        read: isClearedBefore(createdAt, user),
+        createdAt,
+      };
+    });
+}
+
+async function buildEmployeeProjectAlerts(user) {
+  const projects = await findOverdueProjects({ employee: user._id });
+
+  return projects.map((project) => {
+    const title = formatProjectLabel(project.title);
+    const createdAt = project.updatedAt || project.endDate;
+
+    return {
+      id: `project-overdue-${project._id}`,
+      type: 'project_overdue',
+      message: `Your project "${title}" is overdue (was due ${formatProjectDate(project.endDate)}).`,
+      link: '/employee/projects',
+      client: null,
+      entry: null,
+      read: isClearedBefore(createdAt, user),
+      createdAt,
+    };
+  });
+}
+
+async function buildProjectAlerts(user) {
+  if (isAdminLike(user)) return buildAdminProjectAlerts(user);
+  return buildEmployeeProjectAlerts(user);
+}
+
 // Only a super admin can approve signups, so this alert is scoped to that role — anyone else
 // seeing "new account awaiting approval" would have no way to act on it.
 async function buildPendingSignupAlerts(user) {
@@ -182,8 +262,15 @@ async function listNotifications(req, res) {
   const persisted = await Notification.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(100);
   const dueSoon = await buildDueSoon(req.user);
   const taskAlerts = await buildTaskAlerts(req.user);
+  const projectAlerts = await buildProjectAlerts(req.user);
   const signupAlerts = isSuperAdmin(req.user) ? await buildPendingSignupAlerts(req.user) : [];
-  const notifications = sortNotifications([...dueSoon, ...taskAlerts, ...signupAlerts, ...persisted.map(serialize)]);
+  const notifications = sortNotifications([
+    ...dueSoon,
+    ...taskAlerts,
+    ...projectAlerts,
+    ...signupAlerts,
+    ...persisted.map(serialize),
+  ]);
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   return res.json({

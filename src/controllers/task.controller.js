@@ -1,6 +1,7 @@
 const mongoose = require('mongoose');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const Project = require('../models/Project');
 const { deriveDayType, startOfMonth, endOfMonthExclusive } = require('../utils/scoring');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { sendTaskAssignedEmail, sendTaskReviewEmail } = require('../utils/email');
@@ -226,9 +227,27 @@ async function searchTasks(req, res) {
   return res.json({ tasks: results });
 }
 
+// A task can optionally belong to a deadline-bound Project, but only one owned by the same
+// employee the task itself is for — otherwise a task could be wired onto an unrelated person's
+// project. Returns the resolved ObjectId (or null if no project was given), or `undefined` after
+// already sending an error response, in which case the caller must return immediately.
+async function resolveTaskProject(res, projectId, ownerId) {
+  if (!projectId) return null;
+  if (!mongoose.isValidObjectId(projectId)) {
+    res.status(400).json({ error: 'project must be a valid id' });
+    return undefined;
+  }
+  const project = await Project.findOne({ _id: projectId, employee: ownerId });
+  if (!project) {
+    res.status(404).json({ error: 'Project not found' });
+    return undefined;
+  }
+  return project._id;
+}
+
 /** Admin-only: assigns a new task to a given employee + date. Multiple tasks per day are allowed. */
 async function createOrAssignTask(req, res) {
-  const { employeeId, date, assignedTask, brief } = req.body;
+  const { employeeId, date, assignedTask, brief, project } = req.body;
   const trimmedAssignedTask = assignedTask?.trim();
   if (!employeeId || !date || !trimmedAssignedTask) {
     return res.status(400).json({ error: 'employeeId, date and assignedTask are required' });
@@ -240,6 +259,9 @@ async function createOrAssignTask(req, res) {
   const employee = await User.findOne({ _id: employeeId, role: 'employee', status: 'active' });
   if (!employee) return res.status(404).json({ error: 'Employee not found' });
 
+  const projectId = await resolveTaskProject(res, project, employeeId);
+  if (projectId === undefined) return;
+
   const day = new Date(date);
   const task = await Task.create({
     employee: employeeId,
@@ -248,6 +270,7 @@ async function createOrAssignTask(req, res) {
     createdBy: 'admin',
     assignedTask: trimmedAssignedTask,
     brief: brief ?? '',
+    project: projectId,
   });
 
   await recordAudit({
@@ -262,6 +285,7 @@ async function createOrAssignTask(req, res) {
       employeeName: employee.name,
       date: dateKey(task.date),
       task: task.assignedTask,
+      project: projectId ? String(projectId) : null,
     },
   });
 
@@ -278,12 +302,15 @@ async function createOrAssignTask(req, res) {
  * separate route and unaffected.
  */
 async function employeeCreateTask(req, res) {
-  const { date, assignedTask, brief, proofLink, memberStatus } = req.body;
+  const { date, assignedTask, brief, proofLink, memberStatus, project } = req.body;
   const trimmedAssignedTask = assignedTask?.trim();
   if (!date || !trimmedAssignedTask) {
     return res.status(400).json({ error: 'date and assignedTask are required' });
   }
   if (!validateEnumValue(res, 'memberStatus', memberStatus, MEMBER_STATUSES)) return;
+
+  const projectId = await resolveTaskProject(res, project, req.user._id);
+  if (projectId === undefined) return;
 
   const day = new Date(date);
   const task = await Task.create({
@@ -295,6 +322,7 @@ async function employeeCreateTask(req, res) {
     brief: brief ?? '',
     proofLink: proofLink ?? '',
     memberStatus: memberStatus ?? 'on_progress',
+    project: projectId,
   });
 
   return res.status(201).json({ task });
