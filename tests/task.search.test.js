@@ -98,6 +98,33 @@ describe('GET /api/tasks/search', () => {
     expect(res.body.tasks[0].assignedTask).toBe('Flagged one');
   });
 
+  test('filters by memberStatus', async () => {
+    const admin = await createUser({ role: 'admin' });
+    const carol = await createUser({ role: 'employee', name: 'Carol', email: 'carol-s@example.com' });
+    await Task.create({
+      employee: carol._id,
+      date: new Date(),
+      dayType: 'working',
+      createdBy: 'employee',
+      assignedTask: 'Done one',
+      memberStatus: 'done',
+    });
+    await Task.create({
+      employee: carol._id,
+      date: new Date(),
+      dayType: 'working',
+      createdBy: 'employee',
+      assignedTask: 'Still going one',
+      memberStatus: 'on_progress',
+    });
+
+    const res = await request(app).get('/api/tasks/search?memberStatus=done').set('Cookie', authCookie(admin));
+
+    expect(res.status).toBe(200);
+    expect(res.body.tasks).toHaveLength(1);
+    expect(res.body.tasks[0].assignedTask).toBe('Done one');
+  });
+
   test('a search string with regex special characters is treated literally, not as a pattern', async () => {
     const admin = await createUser({ role: 'admin' });
     const bob = await createUser({ role: 'employee', name: 'Bob', email: 'bob-s2@example.com' });

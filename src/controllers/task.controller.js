@@ -173,7 +173,9 @@ async function searchTasks(req, res) {
   const q = String(req.query.q || '').trim();
   const { from, to, employeeId } = req.query;
   const statusFilter = req.query.adminStatus;
+  const memberStatusFilter = req.query.memberStatus;
   if (!validateEnumValue(res, 'adminStatus', statusFilter, ADMIN_STATUSES)) return;
+  if (!validateEnumValue(res, 'memberStatus', memberStatusFilter, MEMBER_STATUSES)) return;
 
   const rawLimit = parseInt(req.query.limit, 10);
   const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
@@ -205,6 +207,7 @@ async function searchTasks(req, res) {
   }
 
   if (statusFilter) filter.adminStatus = statusFilter;
+  if (memberStatusFilter) filter.memberStatus = memberStatusFilter;
 
   if (q) {
     // User-supplied text going straight into $regex — escape it so a search for "a.b" or "(x"
