@@ -2,6 +2,7 @@ const request = require('supertest');
 const Project = require('../src/models/Project');
 const Task = require('../src/models/Task');
 const AuditLog = require('../src/models/AuditLog');
+const Notification = require('../src/models/Notification');
 const { app, createUser, authCookie } = require('./helpers');
 
 function dateStr(daysFromNow) {
@@ -37,6 +38,11 @@ describe('Projects', () => {
 
       const audit = await AuditLog.findOne({ action: 'project.assigned' });
       expect(audit).not.toBeNull();
+
+      const notification = await Notification.findOne({ user: employee._id, type: 'assigned' });
+      expect(notification).not.toBeNull();
+      expect(notification.message).toContain('Ad campaign');
+      expect(notification.link).toBe(`/employee/projects/${res.body.project._id}`);
     });
 
     test('an admin cannot assign a project to another admin', async () => {

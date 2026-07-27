@@ -2,6 +2,7 @@ const mongoose = require('mongoose');
 const Project = require('../models/Project');
 const Task = require('../models/Task');
 const User = require('../models/User');
+const Notification = require('../models/Notification');
 const { isProjectOverdue } = require('../utils/projectStatus');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { isAdminLike, isSuperAdmin } = require('../utils/roles');
@@ -167,6 +168,16 @@ async function createOrAssignProject(req, res) {
     targetLabel: employee.name,
     summary: `Assigned project "${project.title}" to ${employee.name}`,
     metadata: { employeeId: String(employee._id), employeeName: employee.name, title: project.title },
+  });
+
+  // Unlike overdue alerts (recomputed live on every fetch), an assignment is a one-time event —
+  // there's no ongoing state to recompute it from later, so it has to be persisted here or it's
+  // gone the moment this response is sent.
+  await Notification.create({
+    user: employee._id,
+    type: 'assigned',
+    message: `You were assigned a new project: "${project.title}" (due ${range.end.toISOString().slice(0, 10)})`,
+    link: `/employee/projects/${project._id}`,
   });
 
   return res.status(201).json({ project: serializeWithOverdue(project) });
