@@ -9,6 +9,7 @@ async function createUser(overrides = {}) {
   const user = new User({
     name: overrides.name || `User ${n}`,
     email: overrides.email || `user${n}@example.com`,
+    phone: overrides.phone || '',
     employeeCode: overrides.employeeCode || `T${n}`,
     role: overrides.role || 'employee',
     jobTitle: overrides.jobTitle || 'Tester',
