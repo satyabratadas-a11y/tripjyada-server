@@ -10,6 +10,16 @@ const userSchema = new mongoose.Schema(
     employeeCode: { type: String, trim: true, unique: true, sparse: true },
     googleId: { type: String, trim: true, default: '' },
     avatarUrl: { type: String, trim: true, default: '' },
+    // User-uploaded avatars live directly in MongoDB. Keep the binary fields excluded from
+    // ordinary queries so every authenticated request and admin user list does not pull several
+    // megabytes into memory. `avatarUpdatedAt` is the lightweight presence/cache-busting marker.
+    avatarData: { type: Buffer, select: false },
+    avatarMimeType: {
+      type: String,
+      enum: ['image/jpeg', 'image/png'],
+      select: false,
+    },
+    avatarUpdatedAt: { type: Date, default: null },
     passwordHash: { type: String, required: true },
     role: { type: String, enum: USER_ROLES, default: 'employee' },
     jobTitle: { type: String, trim: true, default: '' },
@@ -32,13 +42,18 @@ userSchema.methods.comparePassword = function comparePassword(plainPassword) {
 };
 
 userSchema.methods.toSafeJSON = function toSafeJSON() {
+  const storedAvatarUrl = this.avatarUpdatedAt
+    ? `/api/auth/users/${this._id}/avatar?v=${new Date(this.avatarUpdatedAt).getTime()}`
+    : '';
+
   return {
     id: this._id,
     name: this.name,
     email: this.email,
     phone: this.phone || '',
     employeeCode: this.employeeCode || '',
-    avatarUrl: this.avatarUrl || '',
+    // A database upload takes precedence over the Google/legacy hosted-image fallback.
+    avatarUrl: storedAvatarUrl || this.avatarUrl || '',
     role: this.role,
     jobTitle: this.jobTitle,
     status: this.status,

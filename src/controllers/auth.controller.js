@@ -1,8 +1,8 @@
 const User = require('../models/User');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
 const { signToken, setAuthCookie, clearAuthCookie } = require('../utils/token');
-const { isUploadEnabled, uploadBuffer } = require('../utils/cloudinary');
 
 let googleClient;
 
@@ -235,27 +235,90 @@ async function updateMe(req, res) {
   return res.json({ user: user.toSafeJSON() });
 }
 
-async function updateAvatar(req, res) {
-  if (!isUploadEnabled()) {
-    return res.status(503).json({ error: 'Profile picture uploads are not configured. Add CLOUDINARY_* keys to server/.env to enable them.' });
-  }
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-  if (!req.file.mimetype.startsWith('image/')) {
-    return res.status(400).json({ error: 'Only image files are allowed' });
+function detectAvatarMimeType(buffer) {
+  if (!Buffer.isBuffer(buffer)) return '';
+
+  const isJpeg =
+    buffer.length >= 3 &&
+    buffer[0] === 0xff &&
+    buffer[1] === 0xd8 &&
+    buffer[2] === 0xff;
+  if (isJpeg) return 'image/jpeg';
+
+  const pngSignature = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+  const isPng =
+    buffer.length >= pngSignature.length &&
+    pngSignature.every((byte, index) => buffer[index] === byte);
+  if (isPng) return 'image/png';
+
+  return '';
+}
+
+async function getAvatar(req, res) {
+  if (!mongoose.isValidObjectId(req.params.id)) {
+    return res.status(404).json({ error: 'Profile photo not found' });
   }
 
-  const result = await uploadBuffer(req.file.buffer, {
-    folder: `profile-avatars/${req.user._id}`,
-    resourceType: 'image',
+  const user = await User.findOne({ _id: req.params.id, status: 'active' })
+    .select('+avatarData +avatarMimeType');
+  if (!user?.avatarData?.length || !user.avatarMimeType) {
+    return res.status(404).json({ error: 'Profile photo not found' });
+  }
+
+  res.set({
+    'Content-Type': user.avatarMimeType,
+    'Content-Length': String(user.avatarData.length),
+    'Cache-Control': 'private, max-age=31536000, immutable',
+    'X-Content-Type-Options': 'nosniff',
   });
-  req.user.avatarUrl = result.secure_url;
-  await req.user.save();
+  return res.send(user.avatarData);
+}
+
+async function updateAvatar(req, res) {
+  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+  const avatarMimeType = detectAvatarMimeType(req.file.buffer);
+  if (!avatarMimeType) {
+    return res.status(400).json({ error: 'Only valid JPG and PNG images are allowed' });
+  }
+
+  // Always advance the version, even when two replacements happen in the same millisecond, so
+  // the browser cannot keep displaying a cached previous image.
+  const previousVersion = req.user.avatarUpdatedAt?.getTime?.() || 0;
+  const avatarUpdatedAt = new Date(Math.max(Date.now(), previousVersion + 1));
+
+  await User.updateOne(
+    { _id: req.user._id },
+    {
+      $set: {
+        avatarData: req.file.buffer,
+        avatarMimeType,
+        avatarUpdatedAt,
+        avatarUrl: '',
+      },
+    },
+    { runValidators: true }
+  );
+
+  req.user.avatarUpdatedAt = avatarUpdatedAt;
+  req.user.avatarUrl = '';
   return res.json({ user: req.user.toSafeJSON() });
 }
 
 async function removeAvatar(req, res) {
+  await User.updateOne(
+    { _id: req.user._id },
+    {
+      $unset: {
+        avatarData: 1,
+        avatarMimeType: 1,
+        avatarUpdatedAt: 1,
+      },
+      $set: { avatarUrl: '' },
+    }
+  );
+
   req.user.avatarUrl = '';
-  await req.user.save();
+  req.user.avatarUpdatedAt = null;
   return res.json({ user: req.user.toSafeJSON() });
 }
 
@@ -305,6 +368,7 @@ module.exports = {
   logout,
   me,
   updateMe,
+  getAvatar,
   updateAvatar,
   removeAvatar,
   changePassword,
