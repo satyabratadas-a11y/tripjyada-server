@@ -8,7 +8,6 @@ const commentCtrl = require('../controllers/contentEntry.controller');
 const pillarRoutes = require('./pillar.routes');
 const campaignRoutes = require('./campaign.routes');
 const entryRoutes = require('./contentEntry.routes');
-const aiRoutes = require('./ai.routes');
 
 const router = express.Router();
 
@@ -29,6 +28,5 @@ router.delete('/:clientId/comments/:commentId', asyncHandler(commentCtrl.deleteC
 router.use('/:clientId/pillars', pillarRoutes);
 router.use('/:clientId/campaigns', campaignRoutes);
 router.use('/:clientId/entries', entryRoutes);
-router.use('/:clientId/ai', aiRoutes);
 
 module.exports = router;
