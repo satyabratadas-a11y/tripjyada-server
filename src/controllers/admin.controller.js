@@ -4,7 +4,7 @@ const Task = require('../models/Task');
 const Client = require('../models/Client');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { sendApprovalEmail } = require('../utils/email');
-const { USER_ROLES } = require('../utils/roles');
+const { USER_ROLES, isSuperAdmin } = require('../utils/roles');
 const { startOfMonth, endOfMonthExclusive, rollupTasks } = require('../utils/scoring');
 
 const USER_STATUSES = ['pending', 'active', 'disabled'];
@@ -42,6 +42,22 @@ async function listUsers(req, res) {
   const filter = status ? { status } : {};
   const users = await User.find(filter).sort({ createdAt: -1 });
   return res.json({ users: users.map((u) => u.toSafeJSON()) });
+}
+
+/**
+ * Admin-accessible (unlike listUsers, which is super-admin-only user *management*) — a
+ * read-only name/email directory for pickers like "invite a teammate by name" instead of typing
+ * an exact email. Visibility mirrors every other cross-employee view in the app: a plain admin
+ * sees employees only, a super admin also sees other admins, nobody sees other super admins.
+ */
+async function listDirectory(req, res) {
+  const visibleRoles = isSuperAdmin(req.user) ? ['employee', 'admin'] : ['employee'];
+  const users = await User.find({ role: { $in: visibleRoles }, status: 'active' })
+    .select('name email jobTitle role')
+    .sort({ name: 1 });
+  return res.json({
+    users: users.map((u) => ({ id: u._id, name: u.name, email: u.email, jobTitle: u.jobTitle, role: u.role })),
+  });
 }
 
 async function approveUser(req, res) {
@@ -481,4 +497,4 @@ async function getSuperDashboard(req, res) {
   });
 }
 
-module.exports = { listUsers, approveUser, updateUser, deleteUser, listAuditLogs, getSuperDashboard };
+module.exports = { listUsers, listDirectory, approveUser, updateUser, deleteUser, listAuditLogs, getSuperDashboard };
