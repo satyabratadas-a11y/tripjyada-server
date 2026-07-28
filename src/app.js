@@ -57,7 +57,15 @@ app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   console.error(err);
-  res.status(err.status || 500).json({ error: err.message || 'Internal server error' });
+  const status = err.status || 500;
+  // Every deliberate error in this codebase sets err.status with a hand-written, safe message
+  // (see e.g. gemini.js, auth.controller.js). An error that reaches here with no status is an
+  // unexpected exception from a library (Mongoose, Cloudinary, etc.) — its raw .message can
+  // contain internals we don't want a client to see (a Cloudinary auth failure once leaked the
+  // account's full CLOUDINARY_URL, secret included, into the response). Log the real error above
+  // for diagnosis; only ever send the client a generic message for this unclassified case.
+  const message = status === 500 ? 'Internal server error' : err.message || 'Internal server error';
+  res.status(status).json({ error: message });
 });
 
 module.exports = app;
