@@ -14,6 +14,10 @@ const NOTIFICATION_TYPES = [
 const notificationSchema = new mongoose.Schema(
   {
     user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+    // The person the notification is about/from (who assigned, commented, changed status, ...),
+    // shown as a profile-picture avatar in the notification feed. Null for a notification that
+    // isn't about another specific person (e.g. a due-soon reminder about the recipient's own work).
+    actor: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     type: { type: String, enum: NOTIFICATION_TYPES, required: true },
     message: { type: String, required: true, trim: true },
     link: { type: String, trim: true, default: '' },

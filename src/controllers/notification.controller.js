@@ -6,6 +6,17 @@ const Project = require('../models/Project');
 const User = require('../models/User');
 const { isAdminLike, isSuperAdmin } = require('../utils/roles');
 const { startOfTodayUTC } = require('../utils/projectStatus');
+const { startOfDayIST, addDays, isSundayIST, minutesSinceMidnightIST } = require('../utils/istTime');
+
+// The profile-picture avatar shown next to a notification — the person it's about/from (who
+// assigned, commented, was flagged, etc.), or null for one about the recipient's own work, which
+// gets the plain type icon instead (matches how Facebook-style feeds only show a face for
+// notifications that are genuinely about another person).
+function actorFrom(u) {
+  // An unpopulated ObjectId (or a deleted actor) has no name and is not useful to the client.
+  if (!u?._id || !u.name) return null;
+  return { id: String(u._id), name: u.name, avatarUrl: User.resolveAvatarUrl(u) };
+}
 
 function serialize(n) {
   return {
@@ -17,6 +28,7 @@ function serialize(n) {
     entry: n.entry,
     read: n.read,
     createdAt: n.createdAt,
+    actor: actorFrom(n.actor),
   };
 }
 
@@ -73,19 +85,26 @@ async function buildDueSoon(user) {
     date: { $gte: now, $lte: soon },
     status: { $nin: ['Scheduled', 'Published'] },
   })
-    .select('client date format status')
+    .select('client date format status createdAt')
     .limit(20);
 
-  return entries.map((e) => ({
-    id: `due-${e._id}`,
-    type: 'due_soon',
-    message: `Your ${e.format} is due ${new Date(e.date).toLocaleDateString()} and isn't scheduled yet`,
-    link: `/content/${e.client}/table`,
-    client: e.client,
-    entry: e._id,
-    read: isClearedBefore(e.date, user),
-    createdAt: e.date,
-  }));
+  return entries.map((e) => {
+    // The notification becomes active 24 hours before the deadline. If the entry was created
+    // inside that window, it cannot predate the entry itself.
+    const triggerAt = new Date(e.date.getTime() - 24 * 60 * 60 * 1000);
+    const createdAt = e.createdAt && e.createdAt > triggerAt ? e.createdAt : triggerAt;
+    return {
+      id: `due-${e._id}`,
+      type: 'due_soon',
+      message: `Your ${e.format} is due ${new Date(e.date).toLocaleDateString()} and isn't scheduled yet`,
+      link: `/content/${e.client}/table`,
+      client: e.client,
+      entry: e._id,
+      read: isClearedBefore(createdAt, user),
+      createdAt,
+      actor: null,
+    };
+  });
 }
 
 function shouldAlertAdminForPendingTask(task) {
@@ -101,7 +120,7 @@ async function buildAdminTaskAlerts(user) {
     adminStatus: { $in: ['pending', 'flagged'] },
     date: { $lt: endOfTodayUTC() },
   })
-    .populate('employee', 'name')
+    .populate('employee', 'name avatarUpdatedAt avatarUrl')
     .sort({ updatedAt: -1, date: -1 })
     .limit(40);
 
@@ -126,6 +145,7 @@ async function buildAdminTaskAlerts(user) {
         entry: null,
         read: isClearedBefore(createdAt, user),
         createdAt,
+        actor: actorFrom(task.employee),
       };
     });
 }
@@ -154,6 +174,7 @@ async function buildEmployeeTaskAlerts(user) {
       entry: null,
       read: isClearedBefore(createdAt, user),
       createdAt,
+      actor: null,
     };
   });
 }
@@ -185,7 +206,7 @@ async function findOverdueProjects(extraFilter = {}) {
     status: { $ne: 'completed' },
     endDate: { $lt: startOfTodayUTC() },
   })
-    .populate('employee', 'name')
+    .populate('employee', 'name avatarUpdatedAt avatarUrl')
     .sort({ endDate: -1 })
     .limit(40);
 }
@@ -201,7 +222,7 @@ async function buildAdminProjectAlerts(user) {
       const title = formatProjectLabel(project.title);
       const employeeName = project.employee.name || 'An employee';
       const dueDate = formatProjectDate(project.endDate);
-      const createdAt = project.updatedAt || project.endDate;
+      const createdAt = project.endDate;
 
       return {
         id: `project-overdue-${project._id}`,
@@ -212,6 +233,7 @@ async function buildAdminProjectAlerts(user) {
         entry: null,
         read: isClearedBefore(createdAt, user),
         createdAt,
+        actor: actorFrom(project.employee),
       };
     });
 }
@@ -221,7 +243,7 @@ async function buildEmployeeProjectAlerts(user) {
 
   return projects.map((project) => {
     const title = formatProjectLabel(project.title);
-    const createdAt = project.updatedAt || project.endDate;
+    const createdAt = project.endDate;
 
     return {
       id: `project-overdue-${project._id}`,
@@ -232,6 +254,7 @@ async function buildEmployeeProjectAlerts(user) {
       entry: null,
       read: isClearedBefore(createdAt, user),
       createdAt,
+      actor: null,
     };
   });
 }
@@ -239,6 +262,84 @@ async function buildEmployeeProjectAlerts(user) {
 async function buildProjectAlerts(user) {
   if (isAdminLike(user)) return buildAdminProjectAlerts(user);
   return buildEmployeeProjectAlerts(user);
+}
+
+const TASK_REMINDER_CUTOFF_MINUTES = 11 * 60 + 30; // 11:30 AM IST
+
+/**
+ * "You haven't added a task yet today" — fires for any caller (employee or an admin self-logging
+ * via My Today) once it's past 11:30 AM IST and they have no Task row for today. Skipped on
+ * Sunday, an optional day nobody is expected to have logged anything for yet. Recomputed live on
+ * every fetch, like the other alerts, so it clears itself the moment a task is added — no cron.
+ */
+async function buildTaskReminderAlert(user) {
+  const now = new Date();
+  if (isSundayIST(now)) return [];
+  if (minutesSinceMidnightIST(now) < TASK_REMINDER_CUTOFF_MINUTES) return [];
+
+  const todayStart = startOfDayIST(now);
+  const reminderCreatedAt = new Date(todayStart.getTime() + TASK_REMINDER_CUTOFF_MINUTES * 60 * 1000);
+  const count = await Task.countDocuments({ employee: user._id, date: { $gte: todayStart, $lt: addDays(todayStart, 1) } });
+  if (count > 0) return [];
+
+  return [
+    {
+      id: `task-reminder-${user._id}-${dateKey(todayStart)}`,
+      type: 'task_reminder',
+      message: "You haven't added a task yet today — add one before your day wraps up.",
+      link: isAdminLike(user) ? '/admin/my-today' : '/employee/today',
+      client: null,
+      entry: null,
+      read: isClearedBefore(reminderCreatedAt, user),
+      createdAt: reminderCreatedAt,
+      actor: null,
+    },
+  ];
+}
+
+const TASK_GAP_DAYS = 3;
+
+function buildEmployeeLink(employeeId, date) {
+  const day = dateKey(date);
+  return `/admin/employees/${employeeId}?month=${Number(day.slice(5, 7))}&year=${Number(day.slice(0, 4))}`;
+}
+
+/**
+ * Admin-only: flags any visible employee with zero logged tasks across the last 3 full IST days
+ * (not counting today, which isn't over) — the same live, no-cron approach as the other alerts.
+ * Skips an employee whose account is younger than the window itself, so a brand-new hire isn't
+ * flagged for a history that predates them.
+ */
+async function buildTaskGapAlert(user) {
+  if (!isAdminLike(user)) return [];
+
+  const visibleRoles = isSuperAdmin(user) ? ['employee', 'admin'] : ['employee'];
+  const employees = await User.find({ role: { $in: visibleRoles }, status: 'active' })
+    .select('name createdAt avatarUpdatedAt avatarUrl');
+  if (employees.length === 0) return [];
+
+  const todayStart = startOfDayIST();
+  const windowStart = addDays(todayStart, -TASK_GAP_DAYS);
+
+  const recentTasks = await Task.find({
+    employee: { $in: employees.map((e) => e._id) },
+    date: { $gte: windowStart, $lt: todayStart },
+  }).select('employee');
+  const employeesWithRecentTask = new Set(recentTasks.map((t) => String(t.employee)));
+
+  return employees
+    .filter((e) => e.createdAt <= windowStart && !employeesWithRecentTask.has(String(e._id)))
+    .map((e) => ({
+      id: `task-gap-${e._id}-${dateKey(todayStart)}`,
+      type: 'task_gap',
+      message: `${e.name} hasn't logged any tasks in the last ${TASK_GAP_DAYS} days.`,
+      link: buildEmployeeLink(e._id, todayStart),
+      client: null,
+      entry: null,
+      read: isClearedBefore(todayStart, user),
+      createdAt: todayStart,
+      actor: actorFrom(e),
+    }));
 }
 
 // Only a super admin can approve signups, so this alert is scoped to that role — anyone else
@@ -255,19 +356,27 @@ async function buildPendingSignupAlerts(user) {
     entry: null,
     read: isClearedBefore(u.createdAt, user),
     createdAt: u.createdAt,
+    actor: actorFrom(u),
   }));
 }
 
 async function listNotifications(req, res) {
-  const persisted = await Notification.find({ user: req.user._id }).sort({ createdAt: -1 }).limit(100);
+  const persisted = await Notification.find({ user: req.user._id })
+    .populate('actor', 'name avatarUpdatedAt avatarUrl')
+    .sort({ createdAt: -1 })
+    .limit(100);
   const dueSoon = await buildDueSoon(req.user);
   const taskAlerts = await buildTaskAlerts(req.user);
   const projectAlerts = await buildProjectAlerts(req.user);
+  const taskReminderAlerts = await buildTaskReminderAlert(req.user);
+  const taskGapAlerts = await buildTaskGapAlert(req.user);
   const signupAlerts = isSuperAdmin(req.user) ? await buildPendingSignupAlerts(req.user) : [];
   const notifications = sortNotifications([
     ...dueSoon,
     ...taskAlerts,
     ...projectAlerts,
+    ...taskReminderAlerts,
+    ...taskGapAlerts,
     ...signupAlerts,
     ...persisted.map(serialize),
   ]);
@@ -281,7 +390,8 @@ async function listNotifications(req, res) {
 
 async function markRead(req, res) {
   if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: 'Notification not found' });
-  const notification = await Notification.findOne({ _id: req.params.id, user: req.user._id });
+  const notification = await Notification.findOne({ _id: req.params.id, user: req.user._id })
+    .populate('actor', 'name avatarUpdatedAt avatarUrl');
   if (!notification) return res.status(404).json({ error: 'Notification not found' });
   notification.read = true;
   await notification.save();

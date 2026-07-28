@@ -175,6 +175,7 @@ async function createOrAssignProject(req, res) {
   // gone the moment this response is sent.
   await Notification.create({
     user: employee._id,
+    actor: req.user._id,
     type: 'assigned',
     message: `You were assigned a new project: "${project.title}" (due ${range.end.toISOString().slice(0, 10)})`,
     link: `/employee/projects/${project._id}`,

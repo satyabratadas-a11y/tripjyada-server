@@ -159,6 +159,7 @@ async function createEntry(req, res) {
       link: `/content/${req.client._id}/table`,
       client: req.client._id,
       entry: entry._id,
+      actor: req.user._id,
     });
   }
 
@@ -203,6 +204,7 @@ async function updateEntry(req, res) {
         link: `/content/${req.client._id}/table`,
         client: req.client._id,
         entry: entry._id,
+        actor: req.user._id,
       });
     }
   }
@@ -216,6 +218,7 @@ async function updateEntry(req, res) {
         link: `/content/${req.client._id}/table`,
         client: req.client._id,
         entry: entry._id,
+        actor: req.user._id,
       });
     } else {
       const recipients = [entry.assignee, entry.createdBy].filter(Boolean).map(String);
@@ -225,6 +228,7 @@ async function updateEntry(req, res) {
         link: `/content/${req.client._id}/table`,
         client: req.client._id,
         entry: entry._id,
+        actor: req.user._id,
       });
     }
   }
@@ -264,6 +268,7 @@ async function setApproval(req, res) {
     link: `/content/${req.client._id}/table`,
     client: req.client._id,
     entry: entry._id,
+    actor: req.user._id,
   });
 
   await populateEntry(entry);
@@ -481,6 +486,7 @@ async function addComment(req, res) {
     link: `/content/${req.client._id}/table`,
     client: req.client._id,
     entry: entry._id,
+    actor: req.user._id,
   });
 
   return res.status(201).json({ comment: serializeComment(comment) });

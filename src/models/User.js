@@ -41,19 +41,25 @@ userSchema.methods.comparePassword = function comparePassword(plainPassword) {
   return bcrypt.compare(plainPassword, this.passwordHash);
 };
 
-userSchema.methods.toSafeJSON = function toSafeJSON() {
-  const storedAvatarUrl = this.avatarUpdatedAt
-    ? `/api/auth/users/${this._id}/avatar?v=${new Date(this.avatarUpdatedAt).getTime()}`
+// Shared with notification.controller.js so a notification's actor avatar resolves the exact
+// same way as the user's own profile avatar — works on both a full document and a lean/partial
+// query result, as long as it has _id, avatarUpdatedAt and avatarUrl.
+function resolveAvatarUrl(user) {
+  const storedAvatarUrl = user?.avatarUpdatedAt
+    ? `/api/auth/users/${user._id}/avatar?v=${new Date(user.avatarUpdatedAt).getTime()}`
     : '';
+  // A database upload takes precedence over the Google/legacy hosted-image fallback.
+  return storedAvatarUrl || user?.avatarUrl || '';
+}
 
+userSchema.methods.toSafeJSON = function toSafeJSON() {
   return {
     id: this._id,
     name: this.name,
     email: this.email,
     phone: this.phone || '',
     employeeCode: this.employeeCode || '',
-    // A database upload takes precedence over the Google/legacy hosted-image fallback.
-    avatarUrl: storedAvatarUrl || this.avatarUrl || '',
+    avatarUrl: resolveAvatarUrl(this),
     role: this.role,
     jobTitle: this.jobTitle,
     status: this.status,
@@ -62,3 +68,4 @@ userSchema.methods.toSafeJSON = function toSafeJSON() {
 };
 
 module.exports = mongoose.model('User', userSchema);
+module.exports.resolveAvatarUrl = resolveAvatarUrl;
