@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const mongoose = require('mongoose');
 const { OAuth2Client } = require('google-auth-library');
 const { signToken, setAuthCookie, clearAuthCookie } = require('../utils/token');
+const { ensureTodayAttendanceBestEffort } = require('../utils/attendance');
 
 let googleClient;
 
@@ -123,6 +124,7 @@ async function login(req, res) {
     return res.status(403).json({ error: 'Your account has been disabled' });
   }
 
+  await ensureTodayAttendanceBestEffort(user._id);
   const token = signToken(user);
   setAuthCookie(res, token);
   return res.json({ user: user.toSafeJSON() });
@@ -187,6 +189,7 @@ async function loginWithGoogle(req, res) {
     return res.status(403).json({ error: 'Your account has been disabled' });
   }
 
+  await ensureTodayAttendanceBestEffort(user._id);
   const token = signToken(user);
   setAuthCookie(res, token);
   return res.json({ user: user.toSafeJSON() });
@@ -198,6 +201,7 @@ async function logout(req, res) {
 }
 
 async function me(req, res) {
+  await ensureTodayAttendanceBestEffort(req.user._id);
   return res.json({ user: req.user.toSafeJSON() });
 }
 

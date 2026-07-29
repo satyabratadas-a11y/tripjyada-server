@@ -59,6 +59,32 @@ describe('POST /api/attendance/checkin', () => {
   });
 });
 
+describe('automatic attendance during authentication', () => {
+  test('records attendance during a successful password login', async () => {
+    const employee = await createUser({ email: 'login-attendance@example.com' });
+
+    const res = await request(app)
+      .post('/api/auth/login')
+      .send({ email: employee.email, password: 'password123' });
+
+    expect(res.status).toBe(200);
+    const attendance = await Attendance.findOne({ employee: employee._id, date: startOfDayIST() });
+    expect(attendance).not.toBeNull();
+    expect(attendance.loginAt).toBeTruthy();
+  });
+
+  test('records attendance when an existing session is restored', async () => {
+    const employee = await createUser({ email: 'session-attendance@example.com' });
+
+    const res = await request(app).get('/api/auth/me').set('Cookie', authCookie(employee));
+
+    expect(res.status).toBe(200);
+    const attendance = await Attendance.findOne({ employee: employee._id, date: startOfDayIST() });
+    expect(attendance).not.toBeNull();
+    expect(attendance.loginAt).toBeTruthy();
+  });
+});
+
 describe('GET /api/attendance/today', () => {
   test('is forbidden for a plain employee', async () => {
     const employee = await createUser({ role: 'employee' });
@@ -82,16 +108,20 @@ describe('GET /api/attendance/today', () => {
     expect(rowFor(notCheckedIn._id).loginAt).toBeNull();
   });
 
-  test('a plain admin cannot see another admin\'s attendance; a super admin can', async () => {
+  test('admins see their own attendance without gaining access to peer admins', async () => {
     const plainAdmin = await createUser({ role: 'admin' });
     const superAdmin = await createUser({ role: 'super_admin', email: 'sa@example.com' });
     const otherAdmin = await createUser({ role: 'admin', email: 'other-admin@example.com' });
+    await request(app).post('/api/attendance/checkin').set('Cookie', authCookie(plainAdmin)).send({});
+    await request(app).post('/api/attendance/checkin').set('Cookie', authCookie(superAdmin)).send({});
     await request(app).post('/api/attendance/checkin').set('Cookie', authCookie(otherAdmin)).send({});
 
     const asPlainAdmin = await request(app).get('/api/attendance/today').set('Cookie', authCookie(plainAdmin));
+    expect(asPlainAdmin.body.rows.some((r) => r.employee.id === String(plainAdmin._id))).toBe(true);
     expect(asPlainAdmin.body.rows.some((r) => r.employee.id === String(otherAdmin._id))).toBe(false);
 
     const asSuperAdmin = await request(app).get('/api/attendance/today').set('Cookie', authCookie(superAdmin));
+    expect(asSuperAdmin.body.rows.some((r) => r.employee.id === String(superAdmin._id))).toBe(true);
     expect(asSuperAdmin.body.rows.some((r) => r.employee.id === String(otherAdmin._id))).toBe(true);
   });
 });

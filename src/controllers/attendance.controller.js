@@ -2,6 +2,7 @@ const Attendance = require('../models/Attendance');
 const User = require('../models/User');
 const { startOfDayIST } = require('../utils/istTime');
 const { isSuperAdmin } = require('../utils/roles');
+const { ensureTodayAttendance } = require('../utils/attendance');
 
 /**
  * Records today's first login for the caller and, if the browser provided one, a location
@@ -28,27 +29,24 @@ async function checkIn(req, res) {
     locationSet.locationStatus = status;
   }
 
-  const attendance = await Attendance.findOneAndUpdate(
-    { employee: req.user._id, date: startOfDayIST() },
-    {
-      $setOnInsert: { loginAt: new Date() },
-      ...(Object.keys(locationSet).length ? { $set: locationSet } : {}),
-    },
-    { upsert: true, new: true, setDefaultsOnInsert: true }
-  );
+  const attendance = await ensureTodayAttendance(req.user._id, locationSet);
 
   return res.status(200).json({ attendance });
 }
 
 /**
- * Admin-only: today's login/location status for every visible employee, including anyone who
- * hasn't checked in at all today — the roster comes from User, not Attendance, so a missing
- * check-in is a visible "not logged in" row instead of silently absent. Visibility mirrors the
- * dashboard: a plain admin sees employees only, a super admin also sees other admins.
+ * Admin-only: today's login/location status for every visible employee plus the viewer, including
+ * anyone who hasn't checked in at all today — the roster comes from User, not Attendance, so a
+ * missing check-in is a visible "not logged in" row instead of silently absent. Visibility
+ * mirrors the dashboard: a plain admin sees employees and themself, while a super admin also sees
+ * other admins and themself.
  */
 async function listToday(req, res) {
   const visibleRoles = isSuperAdmin(req.user) ? ['employee', 'admin'] : ['employee'];
-  const employees = await User.find({ role: { $in: visibleRoles }, status: 'active' })
+  const employees = await User.find({
+    status: 'active',
+    $or: [{ role: { $in: visibleRoles } }, { _id: req.user._id }],
+  })
     .select('name jobTitle role')
     .sort({ name: 1 });
 

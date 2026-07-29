@@ -3,6 +3,7 @@ const app = require('./app');
 const connectDB = require('./config/db');
 const Task = require('./models/Task');
 const AuditLog = require('./models/AuditLog');
+const Attendance = require('./models/Attendance');
 const backfillLegacyTasks = require('./utils/backfillTasks');
 const { isSheetsEnabled, missingSheetsEnvVars } = require('./utils/googleSheets');
 
@@ -17,7 +18,7 @@ const PORT = process.env.PORT || 4000;
 app.listen(PORT, () => console.log(`[server] listening on http://localhost:${PORT}`));
 
 connectDB()
-  .then(() => Promise.all([Task.syncIndexes(), AuditLog.syncIndexes()]))
+  .then(() => Promise.all([Task.syncIndexes(), AuditLog.syncIndexes(), Attendance.syncIndexes()]))
   .then(() => backfillLegacyTasks())
   .then(() => {
     // The B2B contact -> Sheets sync fails silently per-request (a save must never break because
