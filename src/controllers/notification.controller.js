@@ -360,6 +360,48 @@ async function buildPendingSignupAlerts(user) {
   }));
 }
 
+const DIRECT_MESSAGE_MAX_LENGTH = 500;
+
+/**
+ * Every active user except the caller, any role — the picker for the push-notification panel.
+ * Unlike admin.controller.js's listDirectory (admin-only, employee/admin visibility only), this
+ * is reachable by any authenticated user and includes every role, because anyone can notify
+ * anyone here.
+ */
+async function listRecipients(req, res) {
+  const users = await User.find({ status: 'active', _id: { $ne: req.user._id } })
+    .select('name email jobTitle role')
+    .sort({ name: 1 });
+  return res.json({
+    users: users.map((u) => ({ id: u._id, name: u.name, email: u.email, jobTitle: u.jobTitle, role: u.role })),
+  });
+}
+
+/**
+ * Lets any authenticated user push a one-off notification to any other active user(s) — not
+ * gated by role, unlike every other notification in this file, which fires automatically from a
+ * system event (assignment, approval, ...). One Notification document per recipient so each
+ * person's read state is independent.
+ */
+async function sendNotification(req, res) {
+  const message = String(req.body.message || '').trim();
+  if (!message) return res.status(400).json({ error: 'Message is required' });
+  if (message.length > DIRECT_MESSAGE_MAX_LENGTH) {
+    return res.status(400).json({ error: `Message must be ${DIRECT_MESSAGE_MAX_LENGTH} characters or fewer` });
+  }
+
+  const requestedIds = Array.isArray(req.body.userIds) ? req.body.userIds : [];
+  const validIds = requestedIds.filter((id) => mongoose.isValidObjectId(id) && String(id) !== String(req.user._id));
+  if (validIds.length === 0) return res.status(400).json({ error: 'At least one recipient is required' });
+
+  const recipients = await User.find({ _id: { $in: validIds }, status: 'active' }).select('_id');
+  if (recipients.length === 0) return res.status(400).json({ error: 'At least one recipient is required' });
+
+  await Notification.insertMany(recipients.map((r) => ({ user: r._id, actor: req.user._id, type: 'direct', message })));
+
+  return res.status(201).json({ count: recipients.length });
+}
+
 async function listNotifications(req, res) {
   const persisted = await Notification.find({ user: req.user._id })
     .populate('actor', 'name avatarUpdatedAt avatarUrl')
@@ -405,4 +447,4 @@ async function markAllRead(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { listNotifications, markRead, markAllRead };
+module.exports = { listNotifications, markRead, markAllRead, listRecipients, sendNotification };
