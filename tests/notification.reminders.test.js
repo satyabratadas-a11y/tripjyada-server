@@ -72,6 +72,15 @@ describe('task_reminder alert', () => {
     expect(reminder).toBeDefined();
     expect(reminder.link).toBe('/admin/my-today');
   });
+
+  test('never appears for a b2b agent, who has no task-logging workflow to remind them about', async () => {
+    const agent = await createUser({ role: 'b2b_agent' });
+    freezeAt(AFTER_CUTOFF_IST);
+
+    const res = await request(app).get('/api/notifications').set('Cookie', authCookie(agent));
+    expect(res.status).toBe(200);
+    expect(res.body.notifications.some((n) => n.type === 'task_reminder')).toBe(false);
+  });
 });
 
 describe('task_gap alert', () => {

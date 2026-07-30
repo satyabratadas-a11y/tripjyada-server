@@ -4,7 +4,7 @@ const ContentEntry = require('../models/ContentEntry');
 const Task = require('../models/Task');
 const Project = require('../models/Project');
 const User = require('../models/User');
-const { isAdminLike, isSuperAdmin } = require('../utils/roles');
+const { isAdminLike, isSuperAdmin, isB2BAgent } = require('../utils/roles');
 const { startOfTodayUTC } = require('../utils/projectStatus');
 const { startOfDayIST, addDays, isSundayIST, minutesSinceMidnightIST } = require('../utils/istTime');
 
@@ -269,10 +269,15 @@ const TASK_REMINDER_CUTOFF_MINUTES = 11 * 60 + 30; // 11:30 AM IST
 /**
  * "You haven't added a task yet today" — fires for any caller (employee or an admin self-logging
  * via My Today) once it's past 11:30 AM IST and they have no Task row for today. Skipped on
- * Sunday, an optional day nobody is expected to have logged anything for yet. Recomputed live on
- * every fetch, like the other alerts, so it clears itself the moment a task is added — no cron.
+ * Sunday, an optional day nobody is expected to have logged anything for yet, and skipped
+ * entirely for a b2b_agent — their workflow (scanning cards, managing contacts) never creates a
+ * Task row, so this would otherwise nag them permanently with a link to a page their role can't
+ * even open. Recomputed live on every fetch, like the other alerts, so it clears itself the
+ * moment a task is added — no cron.
  */
 async function buildTaskReminderAlert(user) {
+  if (isB2BAgent(user)) return [];
+
   const now = new Date();
   if (isSundayIST(now)) return [];
   if (minutesSinceMidnightIST(now) < TASK_REMINDER_CUTOFF_MINUTES) return [];

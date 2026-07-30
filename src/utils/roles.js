@@ -18,6 +18,10 @@ function isAdminLike(input) {
   return role === 'super_admin' || role === 'admin';
 }
 
+function isB2BAgent(input) {
+  return getRole(input) === 'b2b_agent';
+}
+
 function hasRequiredRole(input, allowedRoles = []) {
   const role = getRole(input);
   if (!role) return false;
@@ -32,5 +36,6 @@ module.exports = {
   isSuperAdmin,
   isAdmin,
   isAdminLike,
+  isB2BAgent,
   hasRequiredRole,
 };
