@@ -124,7 +124,10 @@ async function login(req, res) {
     return res.status(403).json({ error: 'Your account has been disabled' });
   }
 
-  await ensureTodayAttendanceBestEffort(user._id);
+  // Fire-and-forget: this is a reliability backstop for the client-side check-in (see
+  // useAttendanceCheckin), not something the caller should ever wait on — logging in must stay
+  // fast even though this write already handles its own errors internally.
+  ensureTodayAttendanceBestEffort(user._id);
   const token = signToken(user);
   setAuthCookie(res, token);
   return res.json({ user: user.toSafeJSON() });
@@ -189,7 +192,8 @@ async function loginWithGoogle(req, res) {
     return res.status(403).json({ error: 'Your account has been disabled' });
   }
 
-  await ensureTodayAttendanceBestEffort(user._id);
+  // Fire-and-forget — see the comment in login() above.
+  ensureTodayAttendanceBestEffort(user._id);
   const token = signToken(user);
   setAuthCookie(res, token);
   return res.json({ user: user.toSafeJSON() });
@@ -201,7 +205,10 @@ async function logout(req, res) {
 }
 
 async function me(req, res) {
-  await ensureTodayAttendanceBestEffort(req.user._id);
+  // Fire-and-forget — this endpoint fires on every page load (see AuthContext's initial
+  // refresh()), so blocking a routine "who am I" read on an attendance write made every single
+  // page load feel slow for no benefit after the first check-in of the day already succeeded.
+  ensureTodayAttendanceBestEffort(req.user._id);
   return res.json({ user: req.user.toSafeJSON() });
 }
 

@@ -37,6 +37,14 @@ describe('POST /api/attendance/checkin', () => {
     expect(res.body.attendance.locationStatus).toBe('denied');
   });
 
+  test('records a timeout status distinctly from a generic error', async () => {
+    const employee = await createUser({ role: 'employee' });
+    const res = await request(app).post('/api/attendance/checkin').set('Cookie', authCookie(employee)).send({ status: 'timeout' });
+
+    expect(res.status).toBe(200);
+    expect(res.body.attendance.locationStatus).toBe('timeout');
+  });
+
   test('rejects an unrecognized status value', async () => {
     const employee = await createUser({ role: 'employee' });
     const res = await request(app).post('/api/attendance/checkin').set('Cookie', authCookie(employee)).send({ status: 'somewhere' });

@@ -408,16 +408,21 @@ async function sendNotification(req, res) {
 }
 
 async function listNotifications(req, res) {
-  const persisted = await Notification.find({ user: req.user._id })
-    .populate('actor', 'name avatarUpdatedAt avatarUrl')
-    .sort({ createdAt: -1 })
-    .limit(100);
-  const dueSoon = await buildDueSoon(req.user);
-  const taskAlerts = await buildTaskAlerts(req.user);
-  const projectAlerts = await buildProjectAlerts(req.user);
-  const taskReminderAlerts = await buildTaskReminderAlert(req.user);
-  const taskGapAlerts = await buildTaskGapAlert(req.user);
-  const signupAlerts = isSuperAdmin(req.user) ? await buildPendingSignupAlerts(req.user) : [];
+  // Each of these is an independent read (none depends on another's result), so they run
+  // concurrently rather than one-after-another — on a remote database this is the difference
+  // between roughly one round trip and seven, every time this polls.
+  const [persisted, dueSoon, taskAlerts, projectAlerts, taskReminderAlerts, taskGapAlerts, signupAlerts] = await Promise.all([
+    Notification.find({ user: req.user._id })
+      .populate('actor', 'name avatarUpdatedAt avatarUrl')
+      .sort({ createdAt: -1 })
+      .limit(100),
+    buildDueSoon(req.user),
+    buildTaskAlerts(req.user),
+    buildProjectAlerts(req.user),
+    buildTaskReminderAlert(req.user),
+    buildTaskGapAlert(req.user),
+    isSuperAdmin(req.user) ? buildPendingSignupAlerts(req.user) : Promise.resolve([]),
+  ]);
   const notifications = sortNotifications([
     ...dueSoon,
     ...taskAlerts,

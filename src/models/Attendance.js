@@ -1,6 +1,6 @@
 const mongoose = require('mongoose');
 
-const LOCATION_STATUSES = ['captured', 'denied', 'unavailable', 'unsupported', 'error'];
+const LOCATION_STATUSES = ['captured', 'denied', 'unavailable', 'unsupported', 'error', 'timeout'];
 
 const attendanceSchema = new mongoose.Schema(
   {
