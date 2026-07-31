@@ -9,6 +9,7 @@
     "start": "node src/server.js",
     "seed:admin": "node scripts/seedAdmin.js",
     "seed:super-admin": "node scripts/seedAdmin.js super_admin",
+    "seed:departments": "node scripts/seedDepartments.js",
     "test": "jest"
   },
   "dependencies": {
