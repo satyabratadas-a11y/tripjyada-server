@@ -134,7 +134,18 @@ async function uploadDocument(req, res) {
     : null;
 
   const resourceType = resourceTypeFor(req.file.mimetype);
-  const result = await uploadBuffer(req.file.buffer, { folder: 'office-portal/departments', resourceType });
+  let result;
+  try {
+    result = await uploadBuffer(req.file.buffer, { folder: 'office-portal/departments', resourceType });
+  } catch (err) {
+    console.error('[cloudinary] upload failed:', err);
+    // Cloudinary's own error payload (e.g. "Invalid Signature ... String to sign - 'folder=…'")
+    // only ever echoes back public request params, never the secret, so — unlike an unclassified
+    // exception — it's safe to forward to the client. That turns "check the server logs we can't
+    // reach" into "read the response body", which is the whole point of exposing it here.
+    const reason = err && err.http_code ? err.message : 'Unknown error';
+    return res.status(502).json({ error: `Cloudinary rejected the upload: ${reason}` });
+  }
 
   department.document = {
     type: 'file',
