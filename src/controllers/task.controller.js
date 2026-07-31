@@ -18,6 +18,25 @@ function ownerOutranksAdmin(ownerRole) {
 const ADMIN_STATUSES = ['pending', 'completed', 'on_progress', 'incomplete', 'flagged'];
 const MEMBER_STATUSES = ['not_started', 'on_progress', 'done', 'not_done'];
 
+// A super admin has no one above them to review their own work — adminUpdateTask's self-review
+// guard blocks them from approving it themselves, and ownerOutranksAdmin means no plain admin can
+// either, so without this their own tasks sit at adminStatus "pending" forever no matter what they
+// report, which silently zeroes their progress in every dashboard/report (those are computed off
+// adminStatus, not memberStatus — see scoring.js's rollupTasks). For a super admin only, their own
+// memberStatus report doubles as the verified status instead of requiring a separate review step.
+function selfCertifiedAdminStatus(memberStatus) {
+  switch (memberStatus) {
+    case 'done':
+      return 'completed';
+    case 'not_done':
+      return 'incomplete';
+    case 'on_progress':
+      return 'on_progress';
+    default:
+      return undefined;
+  }
+}
+
 function dayRangeUTC(dateStr) {
   const base = dateStr ? new Date(dateStr) : new Date();
   const start = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth(), base.getUTCDate()));
@@ -489,6 +508,10 @@ async function bulkEmployeeUpdate(req, res) {
       continue;
     }
     task.memberStatus = memberStatus;
+    if (isSuperAdmin(req.user)) {
+      const mapped = selfCertifiedAdminStatus(memberStatus);
+      if (mapped) task.adminStatus = mapped;
+    }
     await task.save();
     updated.push(task);
   }
@@ -510,6 +533,12 @@ async function employeeUpdateTask(req, res) {
   const update = pickWhitelisted(req.body, fields);
   if (!validateEnumValue(res, 'memberStatus', update.memberStatus, MEMBER_STATUSES)) return;
   Object.assign(task, update);
+
+  if (isSuperAdmin(req.user) && update.memberStatus) {
+    const mapped = selfCertifiedAdminStatus(update.memberStatus);
+    if (mapped) task.adminStatus = mapped;
+  }
+
   await task.save();
 
   return res.json({ task });

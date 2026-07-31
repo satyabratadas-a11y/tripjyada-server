@@ -23,6 +23,7 @@ app.listen(PORT, () => console.log(`[server] listening on http://localhost:${POR
 connectDB()
   .then(() => Promise.all([Task.syncIndexes(), AuditLog.syncIndexes(), Attendance.syncIndexes()]))
   .then(() => backfillLegacyTasks())
+  .then(() => backfillLegacyTasks.backfillSuperAdminSelfCertifiedTasks())
   .then(() => {
     // The B2B contact -> Sheets sync fails silently per-request (a save must never break because
     // Sheets is unreachable), so this is the one place that's actually visible in server logs —
