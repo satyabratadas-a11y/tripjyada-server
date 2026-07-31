@@ -26,4 +26,21 @@ describe('GET /api/reports/monthly', () => {
     expect(res.body.team.completed).toBe(1);
     expect(res.body.team.flags).toBe(1);
   });
+
+  test('includes admins in the roll-up but excludes super_admins', async () => {
+    const viewer = await createUser({ role: 'admin', email: 'report-viewer2@example.com' });
+    await createUser({ role: 'admin', name: 'Manager Admin', email: 'manager-admin@example.com' });
+    await createUser({ role: 'super_admin', name: 'Owner', email: 'owner@example.com' });
+
+    const now = new Date();
+
+    const res = await request(app)
+      .get(`/api/reports/monthly?month=${now.getMonth() + 1}&year=${now.getFullYear()}`)
+      .set('Cookie', authCookie(viewer));
+
+    expect(res.status).toBe(200);
+    const names = res.body.rows.map((r) => r.employee.name);
+    expect(names).toContain('Manager Admin');
+    expect(names).not.toContain('Owner');
+  });
 });

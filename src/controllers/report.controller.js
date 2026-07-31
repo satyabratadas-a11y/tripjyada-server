@@ -46,7 +46,9 @@ function ensurePdfSpace(doc, needed = 40) {
 }
 
 async function buildMonthlyReport(year, month) {
-  const employees = await User.find({ role: 'employee', status: 'active' }).sort({ name: 1 });
+  // Admins do real assigned/logged work too and belong in the roll-up; super_admin is excluded —
+  // that role is account oversight, not a member of the team being reported on.
+  const employees = await User.find({ role: { $in: ['employee', 'admin'] }, status: 'active' }).sort({ name: 1 });
   const rangeStart = startOfMonth(year, month);
   const rangeEnd = endOfMonthExclusive(year, month);
 
