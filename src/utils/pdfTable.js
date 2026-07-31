@@ -26,15 +26,20 @@ function drawTable(doc, { x, top, columns, rows, zebra = true }) {
   }
 
   function drawHeader() {
-    doc.rect(x, y, tableWidth, 22).fill(BRAND_DARK);
-    doc.font('Helvetica-Bold').fontSize(HEADER_FONT_SIZE).fillColor('#FFFFFF');
+    doc.font('Helvetica-Bold').fontSize(HEADER_FONT_SIZE);
+    const headerHeight =
+      Math.max(...columns.map((col) => doc.heightOfString(col.header, { width: col.width - CELL_PAD_X * 2 }))) +
+      CELL_PAD_Y * 2;
+
+    doc.rect(x, y, tableWidth, headerHeight).fill(BRAND_DARK);
+    doc.fillColor('#FFFFFF');
     columns.forEach((col, i) => {
-      doc.text(col.header, columnX(i) + CELL_PAD_X, y + 7, {
+      doc.text(col.header, columnX(i) + CELL_PAD_X, y + CELL_PAD_Y, {
         width: col.width - CELL_PAD_X * 2,
         align: col.align || 'left',
       });
     });
-    y += 22;
+    y += headerHeight;
   }
 
   function pageBottom() {
@@ -44,6 +49,11 @@ function drawTable(doc, { x, top, columns, rows, zebra = true }) {
   drawHeader();
 
   rows.forEach((row, rowIndex) => {
+    // heightOfString has no font/fontSize option of its own — it measures using whatever font is
+    // currently active on `doc`, so that has to be set explicitly before every measurement (not
+    // just once before the loop): drawHeader() below switches to Helvetica-Bold on a page break,
+    // and without resetting it again afterwards the row that triggered the break would render in
+    // the header's bold font instead of the body font.
     doc.font('Helvetica').fontSize(BODY_FONT_SIZE);
     const cellHeights = row.map((cell, i) =>
       doc.heightOfString(String(cell ?? ''), { width: columns[i].width - CELL_PAD_X * 2 })
@@ -60,7 +70,7 @@ function drawTable(doc, { x, top, columns, rows, zebra = true }) {
       doc.rect(x, y, tableWidth, rowHeight).fill(ZEBRA);
     }
 
-    doc.fillColor(TEXT);
+    doc.font('Helvetica').fontSize(BODY_FONT_SIZE).fillColor(TEXT);
     row.forEach((cell, i) => {
       doc.text(String(cell ?? ''), columnX(i) + CELL_PAD_X, y + CELL_PAD_Y, {
         width: columns[i].width - CELL_PAD_X * 2,

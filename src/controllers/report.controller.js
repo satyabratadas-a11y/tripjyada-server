@@ -1,15 +1,22 @@
+const path = require('path');
 const ExcelJS = require('exceljs');
 const PDFDocument = require('pdfkit');
 const User = require('../models/User');
 const Task = require('../models/Task');
 const { startOfMonth, endOfMonthExclusive, rollupTasks } = require('../utils/scoring');
+const { drawTable, drawStatTiles, drawSectionTitle, BRAND_DARK, BORDER, SUBTEXT } = require('../utils/pdfTable');
+
+const LOGO_PATH = path.join(__dirname, '..', 'assets', 'doc_logo.png');
+const PAGE_MARGIN = 40;
 
 function monthKey(year, month) {
   return `${year}-${String(month).padStart(2, '0')}`;
 }
 
-function formatTaskDate(date) {
-  return new Date(date).toISOString().slice(0, 10);
+// The report is already scoped to a single month (shown in the cover header), so each row only
+// needs day + month — the full ISO date was wrapping mid-number in the table's narrow column.
+function formatTaskDateShort(date) {
+  return new Date(date).toLocaleString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC' });
 }
 
 function formatDayType(dayType) {
@@ -37,12 +44,6 @@ function createUniqueSheetName(name, usedNames) {
 
   usedNames.add(candidate);
   return candidate;
-}
-
-function ensurePdfSpace(doc, needed = 40) {
-  if (doc.y + needed > doc.page.height - doc.page.margins.bottom) {
-    doc.addPage();
-  }
 }
 
 async function buildMonthlyReport(year, month) {
@@ -246,6 +247,119 @@ async function downloadMonthlyReport(req, res) {
   res.end();
 }
 
+function monthLabel(year, month) {
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleString('en-US', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+function progressColor(pct) {
+  if (pct >= 80) return '#1E8E3E';
+  if (pct >= 50) return '#B45309';
+  return '#DC2626';
+}
+
+/** Full-bleed brand header for the report's cover page — logo, title, and month/generated. */
+function drawCoverBand(doc, { year, month }) {
+  const width = doc.page.width;
+  doc.rect(0, 0, width, 90).fill(BRAND_DARK);
+  doc.image(LOGO_PATH, PAGE_MARGIN, 18, { width: 150 });
+
+  doc.font('Helvetica-Bold').fontSize(15).fillColor('#FFFFFF').text('MONTHLY PROGRESS REPORT', PAGE_MARGIN, 54);
+  doc.font('Helvetica').fontSize(9).fillColor('#D1D5DB').text('Manager & HR Performance Overview', PAGE_MARGIN, 72);
+
+  const rightWidth = 220;
+  const rightX = width - PAGE_MARGIN - rightWidth;
+  doc
+    .font('Helvetica')
+    .fontSize(9)
+    .fillColor('#D1D5DB')
+    .text(`Month: ${monthLabel(year, month)}`, rightX, 32, { width: rightWidth, align: 'right' })
+    .text(`Generated: ${new Date().toLocaleString('en-US', { dateStyle: 'medium', timeStyle: 'short' })}`, rightX, 46, {
+      width: rightWidth,
+      align: 'right',
+    });
+
+  return 90 + 30;
+}
+
+/** Every page's footer — a rule plus "Page X of Y", drawn last once the total page count is known. */
+function drawPageFooters(doc) {
+  const range = doc.bufferedPageRange();
+  for (let i = range.start; i < range.start + range.count; i += 1) {
+    doc.switchToPage(i);
+    // Writing inside the bottom margin makes pdfkit think the text overflows the page and
+    // silently insert a *new* blank page to hold it instead of rendering it here — dropping the
+    // footer entirely and corrupting the page count. Zeroing the margin during this draw stops
+    // that; it's restored right after so nothing else on the page is affected.
+    const bottomMargin = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
+
+    const bottom = doc.page.height - 26;
+    doc
+      .moveTo(PAGE_MARGIN, bottom)
+      .lineTo(doc.page.width - PAGE_MARGIN, bottom)
+      .strokeColor(BORDER)
+      .lineWidth(0.5)
+      .stroke();
+    doc.font('Helvetica').fontSize(8).fillColor(SUBTEXT);
+    doc.text('Tripjyada — Monthly Progress Report', PAGE_MARGIN, bottom + 8, { width: 300, lineBreak: false });
+    doc.text(`Page ${i + 1 - range.start} of ${range.count}`, doc.page.width - PAGE_MARGIN - 150, bottom + 8, {
+      width: 150,
+      align: 'right',
+      lineBreak: false,
+    });
+
+    doc.page.margins.bottom = bottomMargin;
+  }
+}
+
+const TEAM_TABLE_COLUMNS = [
+  { header: 'Team Member', width: 120 },
+  { header: 'Role', width: 115 },
+  { header: 'Assigned', width: 65, align: 'right' },
+  { header: 'Completed', width: 70, align: 'right' },
+  { header: 'Progress', width: 75, align: 'right' },
+  { header: 'Status', width: 70 },
+];
+
+const TASK_TABLE_COLUMNS = [
+  { header: 'Date', width: 50 },
+  { header: 'Day Type', width: 65 },
+  { header: 'Task', width: 160 },
+  { header: 'Status', width: 65 },
+  { header: 'Verified', width: 65 },
+  { header: 'Notes', width: 110 },
+];
+
+function teamTiles(team) {
+  return [
+    { label: 'Assigned', value: team.assignedDays },
+    { label: 'Completed', value: team.completed },
+    { label: 'On Progress', value: team.onProgress },
+    { label: 'Incomplete', value: team.incomplete },
+    { label: 'Flags', value: team.flags, accent: team.flags > 0 ? '#DC2626' : undefined },
+    { label: 'Progress', value: `${team.progressPct}%`, accent: progressColor(team.progressPct) },
+  ];
+}
+
+function taskTableRow(task) {
+  const taskCell = task.brief && task.brief !== task.assignedTask ? `${task.assignedTask}\n${task.brief}` : task.assignedTask;
+  // A raw Google Drive/Docs URL can run 80+ characters, which alone would force every row with
+  // proof attached onto 4-5 wrapped lines — a plain "attached" flag keeps the table scannable,
+  // while reviewer notes (genuine human commentary) are still shown in full.
+  const notes = [];
+  if (task.proofLink) notes.push('Proof attached');
+  if (task.reviewerNotes) notes.push(task.reviewerNotes);
+
+  return [
+    formatTaskDateShort(task.date),
+    formatDayType(task.dayType),
+    taskCell,
+    formatMemberStatus(task.memberStatus),
+    formatAdminStatus(task.adminStatus),
+    notes.length ? notes.join('\n') : '—',
+  ];
+}
+
 async function downloadMonthlyReportPDF(req, res) {
   const month = parseInt(req.query.month, 10);
   const year = parseInt(req.query.year, 10);
@@ -257,74 +371,58 @@ async function downloadMonthlyReportPDF(req, res) {
   res.setHeader('Content-Type', 'application/pdf');
   res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-  const doc = new PDFDocument({ margin: 40, size: 'A4' });
+  const doc = new PDFDocument({ margin: PAGE_MARGIN, size: 'A4', bufferPages: true });
   doc.pipe(res);
 
-  doc.fontSize(18).text('Monthly Progress Report - Manager & HR');
-  doc.moveDown(0.4);
-  doc.fontSize(11).fillColor('#555').text(`Month: ${monthKey(year, month)}`);
-  doc.text(`Generated: ${new Date().toLocaleString()}`);
-  doc.moveDown();
+  let y = drawCoverBand(doc, { year, month });
 
-  doc.fillColor('#000').fontSize(13).text('Team Summary');
-  doc.moveDown(0.4);
-  doc.fontSize(11);
-  doc.text(`Assigned: ${team.assignedDays}`);
-  doc.text(`Completed: ${team.completed}`);
-  doc.text(`On Progress: ${team.onProgress}`);
-  doc.text(`Incomplete: ${team.incomplete}`);
-  doc.text(`Flags: ${team.flags}`);
-  doc.text(`Progress: ${team.progressPct}%`);
-  doc.moveDown();
+  y = drawSectionTitle(doc, { x: PAGE_MARGIN, top: y, text: 'Team Summary' });
+  y = drawStatTiles(doc, { x: PAGE_MARGIN, top: y, width: 515, tiles: teamTiles(team), columns: 3 }) + 24;
 
-  doc.fontSize(13).text('Members');
-  doc.moveDown(0.4);
-  doc.fontSize(10);
-  for (const row of rows) {
-    ensurePdfSpace(doc, 28);
-    doc.font('Helvetica-Bold').text(row.employee.name, { continued: true });
-    doc
-      .font('Helvetica')
-      .text(
-        `  ${row.employee.jobTitle || '—'} | Assigned ${row.assignedDays} | Completed ${row.completed} | Progress ${row.progressPct}% | Flags ${row.flags}`
-      );
-  }
+  y = drawSectionTitle(doc, { x: PAGE_MARGIN, top: y, text: 'Team Overview' });
+  drawTable(doc, {
+    x: PAGE_MARGIN,
+    top: y,
+    columns: TEAM_TABLE_COLUMNS,
+    rows: rows.map((r) => [r.employee.name, r.employee.jobTitle || '—', r.assignedDays, r.completed, `${r.progressPct}%`, r.integrity]),
+  });
 
   for (const row of rows) {
     doc.addPage();
-    doc.font('Helvetica-Bold').fontSize(15).text(row.employee.name);
-    doc.font('Helvetica').fontSize(11).fillColor('#555').text(row.employee.jobTitle || '—');
-    doc.moveDown(0.5);
-    doc
-      .fillColor('#000')
-      .fontSize(10)
-      .text(
-        `Assigned ${row.assignedDays} | Completed ${row.completed} | On Progress ${row.onProgress} | Incomplete ${row.incomplete} | Flags ${row.flags} | Progress ${row.progressPct}%`
-      );
-    doc.moveDown();
+    let ey = PAGE_MARGIN;
+    doc.font('Helvetica-Bold').fontSize(16).fillColor(BRAND_DARK).text(row.employee.name, PAGE_MARGIN, ey);
+    doc.font('Helvetica').fontSize(10).fillColor(SUBTEXT).text(row.employee.jobTitle || 'Team member', PAGE_MARGIN, ey + 20);
+    ey += 36;
+    doc.moveTo(PAGE_MARGIN, ey).lineTo(PAGE_MARGIN + 515, ey).strokeColor(BORDER).lineWidth(1).stroke();
+    ey += 16;
+
+    ey = drawStatTiles(doc, {
+      x: PAGE_MARGIN,
+      top: ey,
+      width: 515,
+      tiles: [
+        { label: 'Assigned', value: row.assignedDays },
+        { label: 'Completed', value: row.completed },
+        { label: 'On Progress', value: row.onProgress },
+        { label: 'Incomplete', value: row.incomplete },
+        { label: 'Flags', value: row.flags, accent: row.flags > 0 ? '#DC2626' : undefined },
+        { label: 'Progress', value: `${row.progressPct}%`, accent: progressColor(row.progressPct) },
+      ],
+      columns: 3,
+    });
+    ey += 24;
+
+    ey = drawSectionTitle(doc, { x: PAGE_MARGIN, top: ey, text: 'Daily Task Log' });
 
     if (row.tasks.length === 0) {
-      doc.fillColor('#555').text('No tasks recorded for this month.');
+      doc.font('Helvetica').fontSize(10).fillColor(SUBTEXT).text('No tasks recorded for this month.', PAGE_MARGIN, ey);
       continue;
     }
 
-    for (const task of row.tasks) {
-      ensurePdfSpace(doc, 90);
-      doc.font('Helvetica-Bold').fillColor('#000').text(`${formatTaskDate(task.date)}  ${task.assignedTask}`);
-      doc
-        .font('Helvetica')
-        .fontSize(10)
-        .fillColor('#333')
-        .text(`Day type: ${formatDayType(task.dayType)} | Source: ${task.createdBy}`)
-        .text(`Member status: ${formatMemberStatus(task.memberStatus)} | Verified: ${formatAdminStatus(task.adminStatus)}`);
-
-      if (task.brief) doc.text(`Brief: ${task.brief}`);
-      if (task.proofLink) doc.text(`Proof: ${task.proofLink}`);
-      if (task.reviewerNotes) doc.text(`Reviewer notes: ${task.reviewerNotes}`);
-      doc.moveDown(0.7);
-    }
+    drawTable(doc, { x: PAGE_MARGIN, top: ey, columns: TASK_TABLE_COLUMNS, rows: row.tasks.map(taskTableRow) });
   }
 
+  drawPageFooters(doc);
   doc.end();
 }
 
