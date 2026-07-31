@@ -95,16 +95,65 @@ describe('Departments', () => {
     expect(res.status).toBe(403);
   });
 
-  test('uploading a file without Cloudinary configured returns 503', async () => {
+  test('an admin can upload a file, and it downloads back byte-for-byte', async () => {
+    const admin = await createUser({ role: 'admin' });
+    const dept = await Department.create({ name: 'Ad Report', order: 1 });
+    const original = Buffer.from('col1,col2\n1,2\n3,4');
+
+    const uploaded = await request(app)
+      .post(`/api/departments/${dept._id}/document/upload`)
+      .set('Cookie', authCookie(admin))
+      .attach('file', original, 'report.csv')
+      .field('name', 'May 2026 Ad Report');
+
+    expect(uploaded.status).toBe(201);
+    expect(uploaded.body.department.document).toMatchObject({
+      type: 'file',
+      name: 'May 2026 Ad Report',
+      mimeType: 'text/csv',
+    });
+    const fileUrl = uploaded.body.department.document.url;
+    expect(fileUrl).toBe(`/api/departments/${dept._id}/document/file`);
+
+    const downloaded = await request(app).get(fileUrl).set('Cookie', authCookie(admin));
+    expect(downloaded.status).toBe(200);
+    expect(downloaded.text).toBe(original.toString());
+  });
+
+  test('uploading a new file for the same department replaces the old one', async () => {
     const admin = await createUser({ role: 'admin' });
     const dept = await Department.create({ name: 'Ad Report', order: 1 });
 
-    const res = await request(app)
+    const first = await request(app)
       .post(`/api/departments/${dept._id}/document/upload`)
       .set('Cookie', authCookie(admin))
-      .attach('file', Buffer.from('col1,col2\n1,2'), 'report.csv');
+      .attach('file', Buffer.from('old'), 'old.csv');
+    const firstFileUrl = first.body.department.document.url;
 
-    expect(res.status).toBe(503);
+    await request(app)
+      .post(`/api/departments/${dept._id}/document/upload`)
+      .set('Cookie', authCookie(admin))
+      .attach('file', Buffer.from('new'), 'new.csv');
+
+    const stillOld = await request(app).get(firstFileUrl).set('Cookie', authCookie(admin));
+    expect(stillOld.status).toBe(200);
+    expect(stillOld.text).toBe('new');
+  });
+
+  test('a non-admin can still open an uploaded file', async () => {
+    const admin = await createUser({ role: 'admin' });
+    const employee = await createUser({ role: 'employee' });
+    const dept = await Department.create({ name: 'Ad Report', order: 1 });
+
+    const uploaded = await request(app)
+      .post(`/api/departments/${dept._id}/document/upload`)
+      .set('Cookie', authCookie(admin))
+      .attach('file', Buffer.from('shared'), 'report.csv');
+
+    const res = await request(app)
+      .get(uploaded.body.department.document.url)
+      .set('Cookie', authCookie(employee));
+    expect(res.status).toBe(200);
   });
 
   test('an admin can remove a department document', async () => {
@@ -118,5 +167,21 @@ describe('Departments', () => {
     const res = await request(app).delete(`/api/departments/${dept._id}/document`).set('Cookie', authCookie(admin));
     expect(res.status).toBe(200);
     expect(res.body.department.document).toBeNull();
+  });
+
+  test('removing a document deletes the underlying GridFS file', async () => {
+    const admin = await createUser({ role: 'admin' });
+    const dept = await Department.create({ name: 'Ad Report', order: 1 });
+
+    const uploaded = await request(app)
+      .post(`/api/departments/${dept._id}/document/upload`)
+      .set('Cookie', authCookie(admin))
+      .attach('file', Buffer.from('data'), 'report.csv');
+    const fileUrl = uploaded.body.department.document.url;
+
+    await request(app).delete(`/api/departments/${dept._id}/document`).set('Cookie', authCookie(admin));
+
+    const res = await request(app).get(fileUrl).set('Cookie', authCookie(admin));
+    expect(res.status).toBe(404);
   });
 });

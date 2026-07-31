@@ -1,4 +1,7 @@
-require('dotenv').config();
+// override: true so a real .env file on disk always wins over whatever the host's environment
+// variable panel injected — Hostinger's Node.js env var UI has been unreliable here (edits not
+// sticking to the running process), so a file we control directly is the trustworthy source.
+require('dotenv').config({ override: true });
 const app = require('./app');
 const connectDB = require('./config/db');
 const Task = require('./models/Task');

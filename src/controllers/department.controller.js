@@ -1,5 +1,5 @@
 const Department = require('../models/Department');
-const { isUploadEnabled, uploadBuffer, destroyAsset } = require('../utils/cloudinary');
+const { uploadBuffer, openDownloadStream, deleteFile } = require('../utils/gridfs');
 
 function isValidHttpUrl(value) {
   try {
@@ -12,7 +12,9 @@ function isValidHttpUrl(value) {
 
 function serializeDepartment(dept) {
   const obj = dept.toObject ? dept.toObject() : dept;
-  const hasDocument = Boolean(obj.document && obj.document.url);
+  const doc = obj.document;
+  const hasDocument = Boolean(doc && (doc.fileId || doc.url));
+
   return {
     id: obj._id,
     name: obj.name,
@@ -21,24 +23,20 @@ function serializeDepartment(dept) {
     order: obj.order,
     document: hasDocument
       ? {
-          type: obj.document.type,
-          url: obj.document.url,
-          name: obj.document.name,
-          resourceType: obj.document.resourceType,
-          updatedAt: obj.document.updatedAt,
+          type: doc.type,
+          // A file stored in GridFS has no public URL of its own — it's served through our own
+          // streaming route. A link (or a pre-migration Cloudinary upload) already has a real
+          // absolute url, so that's used as-is.
+          url: doc.fileId ? `/api/departments/${obj._id}/document/file` : doc.url,
+          name: doc.name,
+          mimeType: doc.mimeType || '',
+          resourceType: doc.resourceType || '',
+          updatedAt: doc.updatedAt,
         }
       : null,
     createdAt: obj.createdAt,
     updatedAt: obj.updatedAt,
   };
-}
-
-/** Extension-based resource type: Cloudinary only auto-detects image/video, everything else
- * (xlsx, csv, pdf, docx…) needs to be stored as 'raw' or it fails to upload. */
-function resourceTypeFor(mimetype) {
-  if (mimetype.startsWith('image/')) return 'image';
-  if (mimetype.startsWith('video/')) return 'video';
-  return 'raw';
 }
 
 async function listDepartments(req, res) {
@@ -82,12 +80,14 @@ async function deleteDepartment(req, res) {
   const department = await Department.findById(req.params.id);
   if (!department) return res.status(404).json({ error: 'Department not found' });
 
-  if (isUploadEnabled() && department.document?.publicId) {
-    await destroyAsset(department.document.publicId, department.document.resourceType || 'raw').catch((err) => {
-      console.error('[cloudinary] failed to delete asset:', err);
+  const fileId = department.document?.fileId || null;
+  await department.deleteOne();
+
+  if (fileId) {
+    await deleteFile(fileId).catch((err) => {
+      console.error('[gridfs] failed to delete file:', err);
     });
   }
-  await department.deleteOne();
   return res.status(204).send();
 }
 
@@ -101,15 +101,14 @@ async function setDocumentLink(req, res) {
     return res.status(400).json({ error: 'A valid http(s) url is required' });
   }
 
-  if (isUploadEnabled() && department.document?.publicId) {
-    await destroyAsset(department.document.publicId, department.document.resourceType || 'raw').catch((err) => {
-      console.error('[cloudinary] failed to delete asset:', err);
-    });
-  }
+  const previousFileId = department.document?.fileId || null;
 
   department.document = {
     type: 'link',
     url,
+    fileId: null,
+    mimeType: '',
+    size: 0,
     name: req.body.name?.trim() || department.name,
     publicId: '',
     resourceType: '',
@@ -117,67 +116,85 @@ async function setDocumentLink(req, res) {
     updatedBy: req.user._id,
   };
   await department.save();
+
+  if (previousFileId) {
+    await deleteFile(previousFileId).catch((err) => {
+      console.error('[gridfs] failed to delete previous file:', err);
+    });
+  }
+
   return res.json({ department: serializeDepartment(department) });
 }
 
-/** Uploads an Excel/Sheet/other file for this department, replacing any prior upload. */
+/** Uploads an Excel/Sheet/other file for this department into GridFS, replacing any prior upload. */
 async function uploadDocument(req, res) {
-  if (!isUploadEnabled()) {
-    return res.status(503).json({ error: 'File uploads are not configured. Add CLOUDINARY_* keys to server/.env to enable them.' });
-  }
   const department = await Department.findById(req.params.id);
   if (!department) return res.status(404).json({ error: 'Department not found' });
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-  const previous = department.document?.publicId
-    ? { publicId: department.document.publicId, resourceType: department.document.resourceType || 'raw' }
-    : null;
+  const previousFileId = department.document?.fileId || null;
 
-  const resourceType = resourceTypeFor(req.file.mimetype);
-  let result;
-  try {
-    result = await uploadBuffer(req.file.buffer, { folder: 'office-portal/departments', resourceType });
-  } catch (err) {
-    console.error('[cloudinary] upload failed:', err);
-    // Cloudinary's own error payload (e.g. "Invalid Signature ... String to sign - 'folder=…'")
-    // only ever echoes back public request params, never the secret, so — unlike an unclassified
-    // exception — it's safe to forward to the client. That turns "check the server logs we can't
-    // reach" into "read the response body", which is the whole point of exposing it here.
-    const reason = err && err.http_code ? err.message : 'Unknown error';
-    return res.status(502).json({ error: `Cloudinary rejected the upload: ${reason}` });
-  }
+  const fileId = await uploadBuffer(req.file.buffer, {
+    filename: req.file.originalname,
+    contentType: req.file.mimetype,
+  });
 
   department.document = {
     type: 'file',
-    url: result.secure_url,
+    url: '',
+    fileId,
+    mimeType: req.file.mimetype,
+    size: req.file.size,
     name: req.body.name?.trim() || req.file.originalname,
-    publicId: result.public_id,
-    resourceType,
+    publicId: '',
+    resourceType: '',
     updatedAt: new Date(),
     updatedBy: req.user._id,
   };
   await department.save();
 
-  if (previous) {
-    await destroyAsset(previous.publicId, previous.resourceType).catch((err) => {
-      console.error('[cloudinary] failed to delete previous asset:', err);
+  if (previousFileId) {
+    await deleteFile(previousFileId).catch((err) => {
+      console.error('[gridfs] failed to delete previous file:', err);
     });
   }
 
   return res.status(201).json({ department: serializeDepartment(department) });
 }
 
+/** Streams a GridFS-stored document straight from MongoDB — no external file host involved. */
+async function downloadDocument(req, res) {
+  const department = await Department.findById(req.params.id);
+  if (!department) return res.status(404).json({ error: 'Department not found' });
+
+  const fileId = department.document?.fileId;
+  if (!fileId) return res.status(404).json({ error: 'No file stored for this department' });
+
+  const found = await openDownloadStream(fileId);
+  if (!found) return res.status(404).json({ error: 'File not found' });
+
+  const safeName = (department.document.name || found.file.filename || 'document').replace(/"/g, '');
+  res.set('Content-Type', found.file.contentType || department.document.mimeType || 'application/octet-stream');
+  res.set('Content-Disposition', `inline; filename="${encodeURIComponent(safeName)}"`);
+  found.stream.on('error', () => {
+    if (!res.headersSent) res.status(500).json({ error: 'Failed to read file' });
+  });
+  found.stream.pipe(res);
+}
+
 async function removeDocument(req, res) {
   const department = await Department.findById(req.params.id);
   if (!department) return res.status(404).json({ error: 'Department not found' });
 
-  if (isUploadEnabled() && department.document?.publicId) {
-    await destroyAsset(department.document.publicId, department.document.resourceType || 'raw').catch((err) => {
-      console.error('[cloudinary] failed to delete asset:', err);
-    });
-  }
+  const fileId = department.document?.fileId || null;
   department.document = {};
   await department.save();
+
+  if (fileId) {
+    await deleteFile(fileId).catch((err) => {
+      console.error('[gridfs] failed to delete file:', err);
+    });
+  }
   return res.json({ department: serializeDepartment(department) });
 }
 
@@ -188,5 +205,6 @@ module.exports = {
   deleteDepartment,
   setDocumentLink,
   uploadDocument,
+  downloadDocument,
   removeDocument,
 };

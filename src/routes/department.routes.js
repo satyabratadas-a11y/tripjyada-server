@@ -17,6 +17,7 @@ router.delete('/:id', requireRole('admin'), asyncHandler(ctrl.deleteDepartment))
 
 router.post('/:id/document/link', requireRole('admin'), asyncHandler(ctrl.setDocumentLink));
 router.post('/:id/document/upload', requireRole('admin'), upload.single('file'), asyncHandler(ctrl.uploadDocument));
+router.get('/:id/document/file', asyncHandler(ctrl.downloadDocument));
 router.delete('/:id/document', requireRole('admin'), asyncHandler(ctrl.removeDocument));
 
 module.exports = router;

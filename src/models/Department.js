@@ -6,7 +6,12 @@ const documentSchema = new mongoose.Schema(
   {
     type: { type: String, enum: DOCUMENT_TYPES },
     url: { type: String, trim: true, default: '' },
+    fileId: { type: mongoose.Schema.Types.ObjectId, default: null },
+    mimeType: { type: String, trim: true, default: '' },
+    size: { type: Number, default: 0 },
     name: { type: String, trim: true, default: '' },
+    // Cloudinary-era fields — no longer written, kept so documents uploaded before the GridFS
+    // migration still serialize and stay openable.
     publicId: { type: String, default: '' },
     resourceType: { type: String, default: '' },
     updatedAt: { type: Date },
