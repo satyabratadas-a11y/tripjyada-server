@@ -139,7 +139,7 @@ async function uploadDocument(req, res) {
   department.document = {
     type: 'file',
     url: result.secure_url,
-    name: req.file.originalname,
+    name: req.body.name?.trim() || req.file.originalname,
     publicId: result.public_id,
     resourceType,
     updatedAt: new Date(),
