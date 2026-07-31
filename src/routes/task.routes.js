@@ -17,6 +17,8 @@ router.post('/self', requireRole('employee', 'admin'), asyncHandler(ctrl.employe
 // Must come before /:id/admin — otherwise "bulk" would be captured as the :id param and this
 // route would never be reached.
 router.patch('/bulk/admin', requireRole('admin'), asyncHandler(ctrl.bulkAdminUpdate));
+// Same ordering requirement as /bulk/admin above — must come before /:id/employee.
+router.patch('/bulk/employee', asyncHandler(ctrl.bulkEmployeeUpdate));
 router.patch('/:id/admin', requireRole('admin'), asyncHandler(ctrl.adminUpdateTask));
 router.patch('/:id/employee', asyncHandler(ctrl.employeeUpdateTask));
 router.delete('/:id', asyncHandler(ctrl.deleteTask));

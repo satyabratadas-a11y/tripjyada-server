@@ -463,6 +463,39 @@ async function bulkAdminUpdate(req, res) {
   return res.json({ updated, skipped });
 }
 
+/**
+ * Employee self-service equivalent of bulkAdminUpdate: marks many of the caller's own tasks with
+ * the same memberStatus in one call (e.g. selecting a batch and marking them all Done) instead of
+ * one row at a time. A task the caller doesn't own is skipped rather than failing the batch —
+ * shouldn't happen from the UI (it only ever lists the caller's own tasks) but mirrors the admin
+ * bulk endpoint's defensive behavior regardless.
+ */
+async function bulkEmployeeUpdate(req, res) {
+  const { taskIds, memberStatus } = req.body;
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    return res.status(400).json({ error: 'taskIds must be a non-empty array' });
+  }
+  if (!validateEnumValue(res, 'memberStatus', memberStatus, MEMBER_STATUSES)) return;
+
+  const validIds = taskIds.filter((id) => mongoose.isValidObjectId(id));
+  const tasks = await Task.find({ _id: { $in: validIds } });
+
+  const updated = [];
+  const skipped = [];
+
+  for (const task of tasks) {
+    if (String(task.employee) !== String(req.user._id)) {
+      skipped.push({ id: String(task._id), reason: 'You can only update your own task' });
+      continue;
+    }
+    task.memberStatus = memberStatus;
+    await task.save();
+    updated.push(task);
+  }
+
+  return res.json({ updated, skipped });
+}
+
 async function employeeUpdateTask(req, res) {
   const task = await Task.findById(req.params.id);
   if (!task) return res.status(404).json({ error: 'Task not found' });
@@ -537,5 +570,6 @@ module.exports = {
   adminUpdateTask,
   bulkAdminUpdate,
   employeeUpdateTask,
+  bulkEmployeeUpdate,
   deleteTask,
 };
