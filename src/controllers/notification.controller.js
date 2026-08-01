@@ -5,6 +5,7 @@ const Task = require('../models/Task');
 const Project = require('../models/Project');
 const User = require('../models/User');
 const { isAdminLike, isSuperAdmin, isB2BAgent } = require('../utils/roles');
+const { publish, subscribe } = require('../utils/notificationBus');
 const { startOfTodayUTC } = require('../utils/projectStatus');
 const { startOfDayIST, addDays, isSundayIST, minutesSinceMidnightIST } = require('../utils/istTime');
 
@@ -403,8 +404,38 @@ async function sendNotification(req, res) {
   if (recipients.length === 0) return res.status(400).json({ error: 'At least one recipient is required' });
 
   await Notification.insertMany(recipients.map((r) => ({ user: r._id, actor: req.user._id, type: 'direct', message })));
+  recipients.forEach((r) => publish(r._id));
 
   return res.status(201).json({ count: recipients.length });
+}
+
+/**
+ * Server-Sent Events stream — pushed a "refresh now" nudge the instant this user gets a new
+ * persisted notification (see utils/notificationBus.js), instead of waiting for the client's next
+ * poll. The client still polls on an interval too, so a dropped/never-connected stream (e.g. a
+ * proxy that buffers SSE) degrades to the old polling behavior rather than losing notifications.
+ */
+function streamNotifications(req, res) {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    // "no-transform" also tells the compression middleware upstream to leave this response alone
+    // — gzip's own internal buffering would otherwise delay every event past the point of SSE.
+    'Cache-Control': 'no-cache, no-transform',
+    Connection: 'keep-alive',
+    'X-Accel-Buffering': 'no',
+  });
+  res.write('retry: 5000\n\n');
+
+  const nudge = () => res.write(`data: ${Date.now()}\n\n`);
+  const unsubscribe = subscribe(req.user._id, nudge);
+  // Keeps intermediate proxies (and the browser's own timeout) from treating an idle-but-alive
+  // connection as dead.
+  const heartbeat = setInterval(() => res.write(': heartbeat\n\n'), 20000);
+
+  req.on('close', () => {
+    clearInterval(heartbeat);
+    unsubscribe();
+  });
 }
 
 async function listNotifications(req, res) {
@@ -457,4 +488,4 @@ async function markAllRead(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { listNotifications, markRead, markAllRead, listRecipients, sendNotification };
+module.exports = { listNotifications, markRead, markAllRead, listRecipients, sendNotification, streamNotifications };

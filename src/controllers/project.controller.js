@@ -3,6 +3,7 @@ const Project = require('../models/Project');
 const Task = require('../models/Task');
 const User = require('../models/User');
 const Notification = require('../models/Notification');
+const { publish } = require('../utils/notificationBus');
 const { isProjectOverdue } = require('../utils/projectStatus');
 const { diffFields, recordAudit } = require('../utils/audit');
 const { isAdminLike, isSuperAdmin } = require('../utils/roles');
@@ -180,6 +181,7 @@ async function createOrAssignProject(req, res) {
     message: `You were assigned a new project: "${project.title}" (due ${range.end.toISOString().slice(0, 10)})`,
     link: `/employee/projects/${project._id}`,
   });
+  publish(employee._id);
 
   return res.status(201).json({ project: serializeWithOverdue(project) });
 }
