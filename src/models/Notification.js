@@ -30,6 +30,9 @@ const notificationSchema = new mongoose.Schema(
 );
 
 notificationSchema.index({ user: 1, read: 1, createdAt: -1 });
+// TTL index — MongoDB's background task drops a notification 30 days after it was created,
+// read or not, so the collection never grows unbounded and nothing needs a cron job to prune it.
+notificationSchema.index({ createdAt: 1 }, { expireAfterSeconds: 30 * 24 * 60 * 60 });
 
 module.exports = mongoose.model('Notification', notificationSchema);
 module.exports.NOTIFICATION_TYPES = NOTIFICATION_TYPES;
