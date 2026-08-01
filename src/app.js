@@ -14,6 +14,7 @@ const notificationRoutes = require('./routes/notification.routes');
 const contactRoutes = require('./routes/contact.routes');
 const attendanceRoutes = require('./routes/attendance.routes');
 const departmentRoutes = require('./routes/department.routes');
+const influencerRoutes = require('./routes/influencer.routes');
 
 const app = express();
 
@@ -55,6 +56,7 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/contacts', contactRoutes);
 app.use('/api/attendance', attendanceRoutes);
 app.use('/api/departments', departmentRoutes);
+app.use('/api/influencers', influencerRoutes);
 
 app.use((req, res) => res.status(404).json({ error: 'Not found' }));
 
