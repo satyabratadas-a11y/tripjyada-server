@@ -99,9 +99,6 @@ async function extractCardFields(images) {
     config: {
       responseMimeType: 'application/json',
       responseSchema: CARD_FIELD_SCHEMA,
-      // Reading printed fields off a card is a direct lookup task, not a reasoning problem — the
-      // model's default "thinking" budget burns real latency here for no accuracy benefit.
-      thinkingConfig: { thinkingBudget: 0 },
     },
   };
 
