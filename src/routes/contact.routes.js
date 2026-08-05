@@ -25,6 +25,9 @@ router.post('/', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.createC
 // captures (or any, for a super admin) — see deleteContact.
 router.get('/', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.listAll));
 router.get('/export', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.exportContacts));
+// Registered after '/export' so that literal path isn't swallowed by this param route. Fetches a
+// single contact's full record (including photos, which the paginated list above omits).
+router.get('/:id', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.getContact));
 router.delete('/:id', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.deleteContact));
 
 module.exports = router;

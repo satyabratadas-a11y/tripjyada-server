@@ -60,6 +60,10 @@ function normalizedEmails(emailField) {
     .filter(Boolean);
 }
 
+function escapeRegex(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function serializeDuplicate(contact) {
   return {
     id: contact._id,
@@ -164,7 +168,10 @@ async function createContact(req, res) {
 // export mirrors that: every agent and the super admin download the same full list, not a
 // per-agent subset.
 async function exportContacts(req, res) {
-  const contacts = await Contact.find({}).sort({ createdAt: -1 }).populate('capturedBy', 'name');
+  const contacts = await Contact.find({})
+    .select('name company phone email address state pincode capturedBy createdAt')
+    .sort({ createdAt: -1 })
+    .populate('capturedBy', 'name');
 
   const workbook = new ExcelJS.Workbook();
   workbook.creator = 'Task Tracker';
@@ -202,17 +209,49 @@ async function exportContacts(req, res) {
   res.end();
 }
 
+const LIST_PAGE_SIZE = 25;
+const LIST_PAGE_SIZE_MAX = 100;
+// Excludes imageUrl/backImageUrl/rawOcrText — the base64 card photos are the bulk of a Contact
+// document's size (see Contact model), and shipping every row's photos on every list page is what
+// made this endpoint balloon into minutes-long, timing-out responses as the shared pool grew. The
+// detail modal fetches the full record (photos included) on demand via GET /:id instead.
+const LIST_FIELDS = 'name company jobTitle phone email address state pincode capturedBy createdAt';
+
 async function listAll(req, res) {
-  const { agentId, q } = req.query;
+  const { agentId, q, date } = req.query;
+  const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+  const limit = Math.min(LIST_PAGE_SIZE_MAX, Math.max(1, parseInt(req.query.limit, 10) || LIST_PAGE_SIZE));
+
   const filter = {};
   if (agentId) filter.capturedBy = agentId;
   if (q) {
-    const re = new RegExp(String(q).trim(), 'i');
-    filter.$or = [{ name: re }, { company: re }];
+    const re = new RegExp(escapeRegex(String(q).trim()), 'i');
+    filter.$or = [{ name: re }, { company: re }, { phone: re }, { email: re }, { address: re }];
+  }
+  if (date) {
+    const start = new Date(`${date}T00:00:00.000Z`);
+    if (!Number.isNaN(start.getTime())) {
+      filter.createdAt = { $gte: start, $lt: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+    }
   }
 
-  const contacts = await Contact.find(filter).populate('capturedBy', 'name email').sort({ createdAt: -1 });
-  return res.json({ contacts });
+  // Fetch one extra row to know whether another page exists without a separate count query.
+  const rows = await Contact.find(filter)
+    .select(LIST_FIELDS)
+    .populate('capturedBy', 'name email')
+    .sort({ createdAt: -1 })
+    .skip((page - 1) * limit)
+    .limit(limit + 1);
+
+  const hasMore = rows.length > limit;
+  const contacts = hasMore ? rows.slice(0, limit) : rows;
+  return res.json({ contacts, hasMore });
+}
+
+async function getContact(req, res) {
+  const contact = await Contact.findById(req.params.id).populate('capturedBy', 'name email');
+  if (!contact) return res.status(404).json({ error: 'Contact not found' });
+  return res.json({ contact });
 }
 
 async function deleteContact(req, res) {
@@ -240,4 +279,4 @@ async function deleteContact(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { scanCard, createContact, exportContacts, listAll, deleteContact };
+module.exports = { scanCard, createContact, exportContacts, listAll, getContact, deleteContact };
