@@ -27,5 +27,11 @@ const contactSchema = new mongoose.Schema(
 );
 
 contactSchema.index({ capturedBy: 1, createdAt: -1 });
+// listAll (contact.controller.js) sorts createdAt with no capturedBy filter for the shared-pool
+// view, so the compound index above can't serve that sort — Mongo falls back to an in-memory sort
+// across every document, which now includes multi-hundred-KB base64 card photos per row and blows
+// past the 32MB default sort limit once enough contacts pile up. A standalone index lets Mongo
+// satisfy that sort from the index itself instead.
+contactSchema.index({ createdAt: -1 });
 
 module.exports = mongoose.model('Contact', contactSchema);
