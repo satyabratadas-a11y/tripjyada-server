@@ -25,6 +25,11 @@ router.post('/', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.createC
 // captures (or any, for a super admin) — see deleteContact.
 router.get('/', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.listAll));
 router.get('/export', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.exportContacts));
+router.get('/agents', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.listAgents));
+// Live check of whatever GEMINI_API_KEY/GEMINI_MODEL this running process actually has loaded —
+// fires one real scan-shaped request through the same retry logic real scans use. Super-admin-only
+// since every call costs real API usage.
+router.get('/diagnostics/gemini', requireRole('super_admin'), asyncHandler(ctrl.geminiDiagnostic));
 // Registered after '/export' so that literal path isn't swallowed by this param route. Fetches a
 // single contact's full record (including photos, which the paginated list above omits).
 router.get('/:id', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.getContact));

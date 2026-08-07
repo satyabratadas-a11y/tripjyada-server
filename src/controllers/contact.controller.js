@@ -1,7 +1,8 @@
 const ExcelJS = require('exceljs');
 const Contact = require('../models/Contact');
+const User = require('../models/User');
 const { isSuperAdmin } = require('../utils/roles');
-const { extractCardFields } = require('../utils/gemini');
+const { extractCardFields, testConnection } = require('../utils/gemini');
 const { recordAudit } = require('../utils/audit');
 const { appendContactRow } = require('../utils/googleSheets');
 
@@ -62,6 +63,24 @@ function normalizedEmails(emailField) {
 
 function escapeRegex(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Shared between the paginated list and the Excel export, so "download" always matches whatever
+// the agent/date/search filters currently show on screen rather than silently exporting everyone.
+function buildContactFilter({ agentId, q, date }) {
+  const filter = {};
+  if (agentId) filter.capturedBy = agentId;
+  if (q) {
+    const re = new RegExp(escapeRegex(String(q).trim()), 'i');
+    filter.$or = [{ name: re }, { company: re }, { phone: re }, { email: re }, { address: re }];
+  }
+  if (date) {
+    const start = new Date(`${date}T00:00:00.000Z`);
+    if (!Number.isNaN(start.getTime())) {
+      filter.createdAt = { $gte: start, $lt: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
+    }
+  }
+  return filter;
 }
 
 function serializeDuplicate(contact) {
@@ -168,7 +187,8 @@ async function createContact(req, res) {
 // export mirrors that: every agent and the super admin download the same full list, not a
 // per-agent subset.
 async function exportContacts(req, res) {
-  const contacts = await Contact.find({})
+  const { agentId, q, date } = req.query;
+  const contacts = await Contact.find(buildContactFilter({ agentId, q, date }))
     .select('name company phone email address state pincode capturedBy createdAt')
     .sort({ createdAt: -1 })
     .populate('capturedBy', 'name');
@@ -222,21 +242,8 @@ async function listAll(req, res) {
   const page = Math.max(1, parseInt(req.query.page, 10) || 1);
   const limit = Math.min(LIST_PAGE_SIZE_MAX, Math.max(1, parseInt(req.query.limit, 10) || LIST_PAGE_SIZE));
 
-  const filter = {};
-  if (agentId) filter.capturedBy = agentId;
-  if (q) {
-    const re = new RegExp(escapeRegex(String(q).trim()), 'i');
-    filter.$or = [{ name: re }, { company: re }, { phone: re }, { email: re }, { address: re }];
-  }
-  if (date) {
-    const start = new Date(`${date}T00:00:00.000Z`);
-    if (!Number.isNaN(start.getTime())) {
-      filter.createdAt = { $gte: start, $lt: new Date(start.getTime() + 24 * 60 * 60 * 1000) };
-    }
-  }
-
   // Fetch one extra row to know whether another page exists without a separate count query.
-  const rows = await Contact.find(filter)
+  const rows = await Contact.find(buildContactFilter({ agentId, q, date }))
     .select(LIST_FIELDS)
     .populate('capturedBy', 'name email')
     .sort({ createdAt: -1 })
@@ -246,6 +253,17 @@ async function listAll(req, res) {
   const hasMore = rows.length > limit;
   const contacts = hasMore ? rows.slice(0, limit) : rows;
   return res.json({ contacts, hasMore });
+}
+
+// Agents who have captured at least one contact — powers the "filter/download by employee"
+// picker. Scoped to actual capturers rather than every b2b_agent account, since an agent who
+// hasn't scanned anything yet has nothing to filter down to.
+async function listAgents(req, res) {
+  const agentIds = await Contact.distinct('capturedBy');
+  const agents = await User.find({ _id: { $in: agentIds } })
+    .select('name')
+    .sort({ name: 1 });
+  return res.json({ agents: agents.map((a) => ({ id: a._id, name: a.name })) });
 }
 
 async function getContact(req, res) {
@@ -279,4 +297,18 @@ async function deleteContact(req, res) {
   return res.status(204).send();
 }
 
-module.exports = { scanCard, createContact, exportContacts, listAll, getContact, deleteContact };
+async function geminiDiagnostic(req, res) {
+  const result = await testConnection();
+  return res.json(result);
+}
+
+module.exports = {
+  scanCard,
+  createContact,
+  exportContacts,
+  listAll,
+  listAgents,
+  getContact,
+  deleteContact,
+  geminiDiagnostic,
+};

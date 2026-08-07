@@ -155,4 +155,28 @@ async function extractCardFields(images) {
   throw err;
 }
 
-module.exports = { isGeminiEnabled, extractCardFields };
+// A 1x1 red-pixel JPEG — not a real card, just enough for a minimal round trip through the exact
+// same request shape (image + responseSchema) a real scan uses.
+const TINY_JPEG_BASE64 =
+  '/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAMCAgICAgMCAgIDAwMDBAYEBAQEBAgGBgUGCQgKCgkICQkKDA8MCgsOCwkJDRENDg8QEBEQCgwSExIQEw8QEBD/2wBDAQMDAwQDBAgEBAgQCwkLEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBD/wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAj/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIRAxEAPwCdABmX/9k=';
+
+/**
+ * Live diagnostic: fires one real call through the exact same path (and retry/backoff logic) a
+ * card scan uses, against whatever GEMINI_API_KEY/GEMINI_MODEL are actually loaded right now on
+ * this process. Meant for confirming — from the live server itself, not a local guess at what key
+ * it has — whether "overloaded" is genuinely still happening here, and exposing just enough of the
+ * key (a short prefix) to tell two keys apart without leaking the secret.
+ */
+async function testConnection() {
+  const startedAt = Date.now();
+  const keyPrefix = (process.env.GEMINI_API_KEY || '').slice(0, 10);
+  const model = MODEL;
+  try {
+    await extractCardFields([{ buffer: Buffer.from(TINY_JPEG_BASE64, 'base64'), mimeType: 'image/jpeg' }]);
+    return { ok: true, keyPrefix, model, latencyMs: Date.now() - startedAt };
+  } catch (err) {
+    return { ok: false, keyPrefix, model, latencyMs: Date.now() - startedAt, error: err.message };
+  }
+}
+
+module.exports = { isGeminiEnabled, extractCardFields, testConnection };
