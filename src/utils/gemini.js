@@ -1,6 +1,17 @@
 const { GoogleGenAI } = require('@google/genai');
+const { isVisionEnabled, extractTextFromImages } = require('./visionOcr');
 
 const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+
+// Rules that apply the same way whether Gemini is reading raw OCR text (fast path) or the image
+// itself (fallback when Vision OCR isn't configured or fails) — only the intro sentence differs.
+const FIELD_EXTRACTION_RULES = [
+  'If a field is not present or not legible on either side, return an empty string for it — never guess or invent a value.',
+  'If more than one phone number is shown (e.g. primary and secondary), include all of them in "phone", separated by " / ".',
+  'Return the company name as printed (including any stylized logo text), not the job title or tagline.',
+  'Transcribe the email address and website exactly as printed, character for character, even if part of it looks like a typo or misspelling (e.g. a missing letter) — do NOT "correct" or normalize it, since these values must work as-is to actually reach the business.',
+  'Separately from "address" (the street/building line), also extract "state" and "pincode" (postal/zip code) from wherever they appear in the printed address — these are used as their own fields, not folded into "address".',
+];
 
 const CARD_FIELD_SCHEMA = {
   type: 'object',
@@ -82,35 +93,64 @@ async function extractCardFields(images) {
 
   const isTwoSided = images.length > 1;
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-  const request = {
-    model: MODEL,
-    contents: [
-      {
-        role: 'user',
-        parts: [
+
+  // Fast path: OCR the image(s) with Cloud Vision (dedicated, sub-second, not an LLM) and send
+  // Gemini only the resulting text — a much smaller, much faster request than making Gemini itself
+  // read pixels. Falls back to the slower direct-image request below if Vision isn't configured or
+  // its call fails, so a scan never hard-fails over what's meant to be a pure speed optimization.
+  const ocrTexts = await extractTextFromImages(images);
+  const usedOcr = Boolean(ocrTexts);
+
+  const request = usedOcr
+    ? {
+        model: MODEL,
+        contents: [
           {
-            text: [
-              isTwoSided
-                ? 'These images are photographs of the front and back of the same business card. Read both and extract one combined set of contact details — information may be split across the two sides (e.g. the address printed only on the back).'
-                : 'This image is a photograph of a business card. Read it and extract the contact details.',
-              'If a field is not present or not legible on either side, return an empty string for it — never guess or invent a value.',
-              'If more than one phone number is shown (e.g. primary and secondary), include all of them in "phone", separated by " / ".',
-              'Return the company name as printed (including any stylized logo text), not the job title or tagline.',
-              'Transcribe the email address and website exactly as printed, character for character, even if part of it looks like a typo or misspelling (e.g. a missing letter) — do NOT "correct" or normalize it, since these values must work as-is to actually reach the business.',
-              'Separately from "address" (the street/building line), also extract "state" and "pincode" (postal/zip code) from wherever they appear in the printed address — these are used as their own fields, not folded into "address".',
-            ].join(' '),
+            role: 'user',
+            parts: [
+              {
+                text: [
+                  isTwoSided
+                    ? "The following is raw OCR text read from photographs of the front and back of the same business card (front first, then back). Extract one combined set of contact details — information may be split across the two sides (e.g. the address only present in the back's text)."
+                    : 'The following is raw OCR text read from a photograph of a business card. Extract the contact details from it.',
+                  ...FIELD_EXTRACTION_RULES,
+                  'The OCR text may have imperfect line breaks or spacing — use context to interpret it, but still follow the transcription rules above for email/website exactly as they appear in the text.',
+                  '',
+                  isTwoSided ? '--- front ---' : '--- card text ---',
+                  ocrTexts[0],
+                  ...(isTwoSided ? ['', '--- back ---', ocrTexts[1]] : []),
+                ].join('\n'),
+              },
+            ],
           },
-          ...images.map((img) => ({
-            inlineData: { mimeType: img.mimeType || 'image/jpeg', data: img.buffer.toString('base64') },
-          })),
         ],
-      },
-    ],
-    config: {
-      responseMimeType: 'application/json',
-      responseSchema: CARD_FIELD_SCHEMA,
-    },
-  };
+        config: { responseMimeType: 'application/json', responseSchema: CARD_FIELD_SCHEMA },
+      }
+    : {
+        model: MODEL,
+        contents: [
+          {
+            role: 'user',
+            parts: [
+              {
+                text: [
+                  isTwoSided
+                    ? 'These images are photographs of the front and back of the same business card. Read both and extract one combined set of contact details — information may be split across the two sides (e.g. the address printed only on the back).'
+                    : 'This image is a photograph of a business card. Read it and extract the contact details.',
+                  ...FIELD_EXTRACTION_RULES,
+                ].join(' '),
+              },
+              ...images.map((img) => ({
+                inlineData: { mimeType: img.mimeType || 'image/jpeg', data: img.buffer.toString('base64') },
+              })),
+            ],
+          },
+        ],
+        config: {
+          responseMimeType: 'application/json',
+          responseSchema: CARD_FIELD_SCHEMA,
+        },
+      };
 
   const MAX_ATTEMPTS = 4;
   // Longer than before (was 500/1500/3000) — under a per-minute quota, a longer wait has a real
@@ -128,8 +168,9 @@ async function extractCardFields(images) {
       const response = await runQueued(() => ai.models.generateContent(request));
       const text = response.text;
       console.log(
-        `[gemini] scan ok — ${images.length} image(s), ${(totalBytes / 1024).toFixed(0)}KB, attempt ${attempt + 1}, ` +
-          `call took ${Date.now() - attemptStartedAt}ms, total ${Date.now() - startedAt}ms`
+        `[gemini] scan ok — ${usedOcr ? 'vision-ocr+text' : 'direct-image'} path, ${images.length} image(s), ` +
+          `${(totalBytes / 1024).toFixed(0)}KB, attempt ${attempt + 1}, call took ${Date.now() - attemptStartedAt}ms, ` +
+          `total ${Date.now() - startedAt}ms`
       );
       if (!text) throw new Error('AI card scan returned no content');
       return JSON.parse(text);
@@ -171,11 +212,12 @@ async function testConnection() {
   const startedAt = Date.now();
   const keyPrefix = (process.env.GEMINI_API_KEY || '').slice(0, 10);
   const model = MODEL;
+  const visionEnabled = isVisionEnabled();
   try {
     await extractCardFields([{ buffer: Buffer.from(TINY_JPEG_BASE64, 'base64'), mimeType: 'image/jpeg' }]);
-    return { ok: true, keyPrefix, model, latencyMs: Date.now() - startedAt };
+    return { ok: true, keyPrefix, model, visionEnabled, latencyMs: Date.now() - startedAt };
   } catch (err) {
-    return { ok: false, keyPrefix, model, latencyMs: Date.now() - startedAt, error: err.message };
+    return { ok: false, keyPrefix, model, visionEnabled, latencyMs: Date.now() - startedAt, error: err.message };
   }
 }
 
