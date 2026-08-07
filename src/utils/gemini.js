@@ -42,19 +42,29 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Serializes every Gemini call across all agents scanning at once. Under a tight per-minute quota
-// (e.g. a billing account still under Google's identity-verification hold), several agents
-// scanning in the same moment fire concurrently and trip the limit together even though the same
-// requests spread out a second or two apart would each have fit. This doesn't add any delay when
-// only one scan is in flight — it only queues up behind a request that's already running.
-let geminiQueue = Promise.resolve();
+// Caps how many Gemini calls run at once across all agents scanning simultaneously. A paid,
+// billing-linked key has real per-minute headroom (verified: 20 concurrent calls all succeeded in
+// ~2.5s), so this no longer needs to force every scan through a single-file line the way it did
+// under the old free-tier quota — that just added queueing delay with no benefit. The cap still
+// exists so a sudden spike (many agents at one event scanning within the same second) can't fire
+// an unbounded burst at the API.
+const MAX_CONCURRENT_SCANS = 6;
+let activeScans = 0;
+const waiting = [];
+
 function runQueued(task) {
-  const result = geminiQueue.then(task, task);
-  geminiQueue = result.then(
-    () => undefined,
-    () => undefined
-  );
-  return result;
+  return new Promise((resolve, reject) => {
+    const attempt = () => {
+      activeScans++;
+      task().then(resolve, reject).finally(() => {
+        activeScans--;
+        const next = waiting.shift();
+        if (next) next();
+      });
+    };
+    if (activeScans < MAX_CONCURRENT_SCANS) attempt();
+    else waiting.push(attempt);
+  });
 }
 
 /**
