@@ -154,24 +154,46 @@ async function scanCard(req, res) {
 
 // Powers the scan-cost counter on the B2B contacts pages. "scanned" counts every billed Vision/
 // Gemini attempt (success + failure) — that's the number that maps to API spend. "saved" counts
-// actual Contact documents, since not every successful scan is reviewed and saved.
+// actual Contact documents, since not every successful scan is reviewed and saved. Of those saved,
+// "manual" vs "aiScan" is read off imageUrl — ManualContactForm never attaches a photo, while the
+// camera/bulk scanners always do on save (see Contact.js) — so this splits real history correctly,
+// not just counts going forward the way scanned/failed necessarily have to.
 async function scanStats(req, res) {
   const now = new Date();
   const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+  const todayFilter = { createdAt: { $gte: todayStart } };
+  const manualFilter = { imageUrl: '' };
+  const aiScanFilter = { imageUrl: { $ne: '' } };
 
-  const [successAll, failureAll, savedAll, successToday, failureToday, savedToday, scanByAgent, savedByAgent] =
-    await Promise.all([
-      ScanLog.countDocuments({ outcome: 'success' }),
-      ScanLog.countDocuments({ outcome: 'failure' }),
-      Contact.countDocuments(),
-      ScanLog.countDocuments({ outcome: 'success', createdAt: { $gte: todayStart } }),
-      ScanLog.countDocuments({ outcome: 'failure', createdAt: { $gte: todayStart } }),
-      Contact.countDocuments({ createdAt: { $gte: todayStart } }),
-      // All-time, split by who captured it — this is what actually points at who/what is driving
-      // spend, rather than just one blended number for the whole team.
-      ScanLog.aggregate([{ $group: { _id: { agent: '$capturedBy', outcome: '$outcome' }, count: { $sum: 1 } } }]),
-      Contact.aggregate([{ $group: { _id: '$capturedBy', count: { $sum: 1 } } }]),
-    ]);
+  const [
+    successAll,
+    failureAll,
+    savedAll,
+    manualAll,
+    aiScanAll,
+    successToday,
+    failureToday,
+    savedToday,
+    manualToday,
+    aiScanToday,
+    scanByAgent,
+    savedByAgent,
+  ] = await Promise.all([
+    ScanLog.countDocuments({ outcome: 'success' }),
+    ScanLog.countDocuments({ outcome: 'failure' }),
+    Contact.countDocuments(),
+    Contact.countDocuments(manualFilter),
+    Contact.countDocuments(aiScanFilter),
+    ScanLog.countDocuments({ outcome: 'success', ...todayFilter }),
+    ScanLog.countDocuments({ outcome: 'failure', ...todayFilter }),
+    Contact.countDocuments(todayFilter),
+    Contact.countDocuments({ ...manualFilter, ...todayFilter }),
+    Contact.countDocuments({ ...aiScanFilter, ...todayFilter }),
+    // All-time, split by who captured it — this is what actually points at who/what is driving
+    // spend, rather than just one blended number for the whole team.
+    ScanLog.aggregate([{ $group: { _id: { agent: '$capturedBy', outcome: '$outcome' }, count: { $sum: 1 } } }]),
+    Contact.aggregate([{ $group: { _id: '$capturedBy', count: { $sum: 1 } } }]),
+  ]);
 
   const byAgentMap = new Map();
   function bucket(agentId) {
@@ -197,8 +219,14 @@ async function scanStats(req, res) {
     .sort((a, b) => b.scanned - a.scanned);
 
   return res.json({
-    allTime: { scanned: successAll + failureAll, saved: savedAll, failed: failureAll },
-    today: { scanned: successToday + failureToday, saved: savedToday, failed: failureToday },
+    allTime: { scanned: successAll + failureAll, saved: savedAll, failed: failureAll, manual: manualAll, aiScan: aiScanAll },
+    today: {
+      scanned: successToday + failureToday,
+      saved: savedToday,
+      failed: failureToday,
+      manual: manualToday,
+      aiScan: aiScanToday,
+    },
     byAgent,
   });
 }
