@@ -26,6 +26,9 @@ router.post('/', requireRole('b2b_agent'), cardImages, asyncHandler(ctrl.createC
 router.get('/', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.listAll));
 router.get('/export', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.exportContacts));
 router.get('/agents', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.listAgents));
+// Read-only counters (no API calls) — how many scan attempts were billed, how many saved, how many
+// failed. Same roles as the list itself, since both agent and admin views show this counter.
+router.get('/scan-stats', requireRole('b2b_agent', 'super_admin'), asyncHandler(ctrl.scanStats));
 // Live check of whatever GEMINI_API_KEY/GEMINI_MODEL this running process actually has loaded —
 // fires one real scan-shaped request through the same retry logic real scans use. Super-admin-only
 // since every call costs real API usage.

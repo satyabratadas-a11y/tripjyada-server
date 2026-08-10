@@ -1,6 +1,7 @@
 const ExcelJS = require('exceljs');
 const Contact = require('../models/Contact');
 const User = require('../models/User');
+const ScanLog = require('../models/ScanLog');
 const { isSuperAdmin } = require('../utils/roles');
 const { extractCardFields, testConnection } = require('../utils/gemini');
 const { recordAudit } = require('../utils/audit');
@@ -114,6 +115,16 @@ async function findDuplicateContact({ phone, email, excludeId }) {
   );
 }
 
+// Every call here is a billed Vision/Gemini request whether the scan succeeded or failed — this is
+// what GET /api/contacts/scan-stats reports so that spend shows up here instead of only being
+// discovered days later as a drained credit balance. Logging failures must never override the real
+// error the caller is about to see, so this is fire-and-forget.
+function logScanAttempt(user, outcome, errorMessage = '') {
+  return ScanLog.create({ capturedBy: user._id, outcome, errorMessage: (errorMessage || '').slice(0, 300) }).catch(
+    () => {}
+  );
+}
+
 async function scanCard(req, res) {
   const requestStartedAt = Date.now();
   const frontFile = req.files?.image?.[0];
@@ -126,11 +137,41 @@ async function scanCard(req, res) {
   const images = [{ buffer: frontFile.buffer, mimeType: frontFile.mimetype }];
   if (backFile) images.push({ buffer: backFile.buffer, mimeType: backFile.mimetype });
 
-  const fields = await extractCardFields(images);
+  let fields;
+  try {
+    fields = await extractCardFields(images);
+  } catch (err) {
+    await logScanAttempt(req.user, 'failure', err.message);
+    throw err;
+  }
+  await logScanAttempt(req.user, 'success');
+
   fields.phone = cleanPhoneField(fields.phone);
   const duplicate = await findDuplicateContact({ phone: fields.phone, email: fields.email });
   console.log(`[scanCard] request handled in ${Date.now() - requestStartedAt}ms`);
   return res.json({ fields, duplicate: duplicate ? serializeDuplicate(duplicate) : null });
+}
+
+// Powers the scan-cost counter on the B2B contacts pages. "scanned" counts every billed Vision/
+// Gemini attempt (success + failure) — that's the number that maps to API spend. "saved" counts
+// actual Contact documents, since not every successful scan is reviewed and saved.
+async function scanStats(req, res) {
+  const now = new Date();
+  const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+
+  const [successAll, failureAll, savedAll, successToday, failureToday, savedToday] = await Promise.all([
+    ScanLog.countDocuments({ outcome: 'success' }),
+    ScanLog.countDocuments({ outcome: 'failure' }),
+    Contact.countDocuments(),
+    ScanLog.countDocuments({ outcome: 'success', createdAt: { $gte: todayStart } }),
+    ScanLog.countDocuments({ outcome: 'failure', createdAt: { $gte: todayStart } }),
+    Contact.countDocuments({ createdAt: { $gte: todayStart } }),
+  ]);
+
+  return res.json({
+    allTime: { scanned: successAll + failureAll, saved: savedAll, failed: failureAll },
+    today: { scanned: successToday + failureToday, saved: savedToday, failed: failureToday },
+  });
 }
 
 function pickContactFields(body) {
@@ -311,4 +352,5 @@ module.exports = {
   getContact,
   deleteContact,
   geminiDiagnostic,
+  scanStats,
 };
