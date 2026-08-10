@@ -159,18 +159,47 @@ async function scanStats(req, res) {
   const now = new Date();
   const todayStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
 
-  const [successAll, failureAll, savedAll, successToday, failureToday, savedToday] = await Promise.all([
-    ScanLog.countDocuments({ outcome: 'success' }),
-    ScanLog.countDocuments({ outcome: 'failure' }),
-    Contact.countDocuments(),
-    ScanLog.countDocuments({ outcome: 'success', createdAt: { $gte: todayStart } }),
-    ScanLog.countDocuments({ outcome: 'failure', createdAt: { $gte: todayStart } }),
-    Contact.countDocuments({ createdAt: { $gte: todayStart } }),
-  ]);
+  const [successAll, failureAll, savedAll, successToday, failureToday, savedToday, scanByAgent, savedByAgent] =
+    await Promise.all([
+      ScanLog.countDocuments({ outcome: 'success' }),
+      ScanLog.countDocuments({ outcome: 'failure' }),
+      Contact.countDocuments(),
+      ScanLog.countDocuments({ outcome: 'success', createdAt: { $gte: todayStart } }),
+      ScanLog.countDocuments({ outcome: 'failure', createdAt: { $gte: todayStart } }),
+      Contact.countDocuments({ createdAt: { $gte: todayStart } }),
+      // All-time, split by who captured it — this is what actually points at who/what is driving
+      // spend, rather than just one blended number for the whole team.
+      ScanLog.aggregate([{ $group: { _id: { agent: '$capturedBy', outcome: '$outcome' }, count: { $sum: 1 } } }]),
+      Contact.aggregate([{ $group: { _id: '$capturedBy', count: { $sum: 1 } } }]),
+    ]);
+
+  const byAgentMap = new Map();
+  function bucket(agentId) {
+    const key = String(agentId);
+    if (!byAgentMap.has(key)) byAgentMap.set(key, { scanned: 0, saved: 0, failed: 0 });
+    return byAgentMap.get(key);
+  }
+  for (const row of scanByAgent) {
+    const stats = bucket(row._id.agent);
+    stats.scanned += row.count;
+    if (row._id.outcome === 'failure') stats.failed += row.count;
+  }
+  for (const row of savedByAgent) {
+    bucket(row._id).saved += row.count;
+  }
+
+  const agentIds = [...byAgentMap.keys()];
+  const users = await User.find({ _id: { $in: agentIds } }).select('name');
+  const nameById = new Map(users.map((u) => [String(u._id), u.name]));
+
+  const byAgent = agentIds
+    .map((id) => ({ id, name: nameById.get(id) || 'Deleted user', ...byAgentMap.get(id) }))
+    .sort((a, b) => b.scanned - a.scanned);
 
   return res.json({
     allTime: { scanned: successAll + failureAll, saved: savedAll, failed: failureAll },
     today: { scanned: successToday + failureToday, saved: savedToday, failed: failureToday },
+    byAgent,
   });
 }
 
