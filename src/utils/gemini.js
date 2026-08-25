@@ -1,7 +1,16 @@
 const { GoogleGenAI } = require('@google/genai');
 const { isVisionEnabled, extractTextFromImages } = require('./visionOcr');
 
-const MODEL = process.env.GEMINI_MODEL || 'gemini-flash-latest';
+// Pin the default to the stable Flash-Lite model instead of the moving `*-latest` alias. Card
+// extraction is a short document-parsing task, so a low-latency model with minimal thinking is a
+// better fit than whichever general-purpose Flash release the alias happens to point at.
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+// Gemini's API rejects manually-set deadlines below 10 seconds. A timeout is not retried, so this
+// remains the hard upper bound for a stalled call; only fast transient 429/5xx responses get the
+// second attempt below.
+const GEMINI_ATTEMPT_TIMEOUT_MS = 10_000;
+const MAX_ATTEMPTS = 2;
+const BACKOFF_MS = [750];
 
 // Rules that apply the same way whether Gemini is reading raw OCR text (fast path) or the image
 // itself (fallback when Vision OCR isn't configured or fails) — only the intro sentence differs.
@@ -33,7 +42,15 @@ function isGeminiEnabled() {
   return Boolean(process.env.GEMINI_API_KEY);
 }
 
+function isTimeoutError(err) {
+  const message = String(err?.message || '');
+  return err?.name === 'AbortError' || err?.name === 'TimeoutError' || /timed?\s*out|timeout/i.test(message);
+}
+
 function isRetryableError(err) {
+  if (isTimeoutError(err)) return false;
+  if ([408, 429, 500, 502, 503, 504].includes(Number(err?.status || err?.code))) return true;
+
   // The SDK throws with the raw API error JSON as the message on failure responses.
   let code;
   let status;
@@ -91,6 +108,8 @@ async function extractCardFields(images) {
     throw err;
   }
 
+  const startedAt = Date.now();
+  const totalBytes = images.reduce((sum, img) => sum + img.buffer.length, 0);
   const isTwoSided = images.length > 1;
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -98,8 +117,20 @@ async function extractCardFields(images) {
   // Gemini only the resulting text — a much smaller, much faster request than making Gemini itself
   // read pixels. Falls back to the slower direct-image request below if Vision isn't configured or
   // its call fails, so a scan never hard-fails over what's meant to be a pure speed optimization.
+  const ocrStartedAt = Date.now();
   const ocrTexts = await extractTextFromImages(images);
+  const ocrMs = Date.now() - ocrStartedAt;
   const usedOcr = Boolean(ocrTexts);
+
+  const responseConfig = {
+    responseMimeType: 'application/json',
+    responseSchema: CARD_FIELD_SCHEMA,
+    maxOutputTokens: 1024,
+    thinkingConfig: { thinkingLevel: 'minimal' },
+    // The SDK turns this into a real AbortSignal-backed request timeout, which releases the
+    // concurrency slot instead of leaving a hung provider call at the front of the queue forever.
+    httpOptions: { timeout: GEMINI_ATTEMPT_TIMEOUT_MS },
+  };
 
   const request = usedOcr
     ? {
@@ -124,7 +155,7 @@ async function extractCardFields(images) {
             ],
           },
         ],
-        config: { responseMimeType: 'application/json', responseSchema: CARD_FIELD_SCHEMA },
+        config: responseConfig,
       }
     : {
         model: MODEL,
@@ -146,21 +177,10 @@ async function extractCardFields(images) {
             ],
           },
         ],
-        config: {
-          responseMimeType: 'application/json',
-          responseSchema: CARD_FIELD_SCHEMA,
-        },
+        config: responseConfig,
       };
 
-  const MAX_ATTEMPTS = 4;
-  // Longer than before (was 500/1500/3000) — under a per-minute quota, a longer wait has a real
-  // chance of landing in the next window; a few extra seconds of "Reading card with AI…" is a much
-  // better trade than failing outright and asking the agent to type the card in by hand.
-  const BACKOFF_MS = [1000, 3000, 6000];
   let lastError;
-
-  const totalBytes = images.reduce((sum, img) => sum + img.buffer.length, 0);
-  const startedAt = Date.now();
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     const attemptStartedAt = Date.now();
@@ -169,7 +189,8 @@ async function extractCardFields(images) {
       const text = response.text;
       console.log(
         `[gemini] scan ok — ${usedOcr ? 'vision-ocr+text' : 'direct-image'} path, ${images.length} image(s), ` +
-          `${(totalBytes / 1024).toFixed(0)}KB, attempt ${attempt + 1}, call took ${Date.now() - attemptStartedAt}ms, ` +
+          `${(totalBytes / 1024).toFixed(0)}KB, OCR ${ocrMs}ms, attempt ${attempt + 1}, ` +
+          `call took ${Date.now() - attemptStartedAt}ms, ` +
           `total ${Date.now() - startedAt}ms`
       );
       if (!text) throw new Error('AI card scan returned no content');
@@ -188,11 +209,13 @@ async function extractCardFields(images) {
   }
 
   const err = new Error(
-    isRetryableError(lastError)
+    isTimeoutError(lastError)
+      ? 'The AI card reader took too long to respond. Please try again, or fill the fields in manually.'
+      : isRetryableError(lastError)
       ? "The AI card reader is temporarily overloaded. Please try again in a moment, or fill the fields in manually."
       : 'Could not read the card. Please try again, or fill the fields in manually.'
   );
-  err.status = 503;
+  err.status = isTimeoutError(lastError) ? 504 : 503;
   throw err;
 }
 
@@ -222,3 +245,4 @@ async function testConnection() {
 }
 
 module.exports = { isGeminiEnabled, extractCardFields, testConnection };
+
