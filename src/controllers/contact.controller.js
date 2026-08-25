@@ -102,17 +102,22 @@ async function findDuplicateContact({ phone, email, excludeId }) {
   const query = { $or: [{ phone: { $nin: ['', null] } }, { email: { $nin: ['', null] } }] };
   if (excludeId) query._id = { $ne: excludeId };
 
-  const candidates = await Contact.find(query)
-    .select('name company phone email capturedBy createdAt')
-    .populate('capturedBy', 'name');
+  // Duplicate comparison still needs normalized legacy values, but it does not need full Mongoose
+  // documents or one populated User object per candidate. Compare lean contact rows first, then
+  // fetch only the single capturer name that will actually be returned.
+  const candidates = await Contact.find(query).select('name company phone email capturedBy createdAt').lean();
 
-  return (
-    candidates.find((c) => {
-      const cPhones = normalizedPhones(c.phone);
-      const cEmails = normalizedEmails(c.email);
-      return phones.some((p) => cPhones.includes(p)) || emails.some((e) => cEmails.includes(e));
-    }) || null
-  );
+  const duplicate = candidates.find((c) => {
+    const cPhones = normalizedPhones(c.phone);
+    const cEmails = normalizedEmails(c.email);
+    return phones.some((p) => cPhones.includes(p)) || emails.some((e) => cEmails.includes(e));
+  });
+  if (!duplicate) return null;
+
+  duplicate.capturedBy = duplicate.capturedBy
+    ? await User.findById(duplicate.capturedBy).select('name').lean()
+    : null;
+  return duplicate;
 }
 
 // Every call here is a billed Vision/Gemini request whether the scan succeeded or failed — this is
@@ -138,17 +143,22 @@ async function scanCard(req, res) {
   if (backFile) images.push({ buffer: backFile.buffer, mimeType: backFile.mimetype });
 
   let fields;
+  const aiStartedAt = Date.now();
   try {
     fields = await extractCardFields(images);
   } catch (err) {
-    await logScanAttempt(req.user, 'failure', err.message);
+    void logScanAttempt(req.user, 'failure', err.message);
     throw err;
   }
-  await logScanAttempt(req.user, 'success');
+  void logScanAttempt(req.user, 'success');
 
   fields.phone = cleanPhoneField(fields.phone);
+  const duplicateStartedAt = Date.now();
   const duplicate = await findDuplicateContact({ phone: fields.phone, email: fields.email });
-  console.log(`[scanCard] request handled in ${Date.now() - requestStartedAt}ms`);
+  console.log(
+    `[scanCard] AI ${duplicateStartedAt - aiStartedAt}ms, duplicate lookup ${Date.now() - duplicateStartedAt}ms, ` +
+      `total ${Date.now() - requestStartedAt}ms`
+  );
   return res.json({ fields, duplicate: duplicate ? serializeDuplicate(duplicate) : null });
 }
 
@@ -411,3 +421,4 @@ module.exports = {
   geminiDiagnostic,
   scanStats,
 };
+
